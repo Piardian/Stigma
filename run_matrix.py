@@ -1,9 +1,10 @@
-"""Walk-forward test matrix runner for Stigma Quant Engine.
+"""Walk-forward test matrix runner for Stigma Quant Engine (Faz 2).
 
 Executes all 28 combinations:
   - 5 MT5 instruments (EURUSD, CADCHF, USDJPY, XAUUSD, NAS100) x 2 timeframes (M5, M15) x 2 modes (Autonomous, Macro)
   - 2 Binance instruments (BTCUSDT, SOLUSDT) x 2 timeframes (M5, M15) x 2 modes (Autonomous, Macro)
 Chronological split: 60% Train, 20% Validation, 20% Untouched Out-Of-Sample.
+Includes comprehensive Funnel Telemetry and multi-period stability auditing.
 """
 from __future__ import annotations
 import json
@@ -45,8 +46,14 @@ DATA_TARGETS = {
 
 TIMEFRAMES = ["M5", "M15"]
 
-def evaluate_wf_split(df: pd.DataFrame, cost: dict, macro_bias: int, tf_min: int) -> dict:
-    """Split data chronologically into Train (60%), Val (20%), OOS (20%)."""
+def evaluate_wf_split(
+    df: pd.DataFrame,
+    cost: dict,
+    macro_bias: int,
+    tf_min: int,
+    session_type: str = "auto",
+) -> dict:
+    """Split data chronologically into Train (60%), Val (20%), OOS (20%) with Funnel Diagnostics."""
     n = len(df)
     i_train = int(n * 0.60)
     i_val = int(n * 0.80)
@@ -55,10 +62,42 @@ def evaluate_wf_split(df: pd.DataFrame, cost: dict, macro_bias: int, tf_min: int
     df_val = df.iloc[i_train:i_val]
     df_oos = df.iloc[i_val:]
 
-    res_train = backtest(df_train, spread=cost["spread"], commission=cost["commission"], slippage=cost["slippage"], macro_bias=macro_bias, timeframe_minutes=tf_min)
-    res_val = backtest(df_val, spread=cost["spread"], commission=cost["commission"], slippage=cost["slippage"], macro_bias=macro_bias, timeframe_minutes=tf_min)
-    res_oos = backtest(df_oos, spread=cost["spread"], commission=cost["commission"], slippage=cost["slippage"], macro_bias=macro_bias, timeframe_minutes=tf_min)
-    res_full = backtest(df, spread=cost["spread"], commission=cost["commission"], slippage=cost["slippage"], macro_bias=macro_bias, timeframe_minutes=tf_min)
+    res_train = backtest(
+        df_train,
+        spread=cost["spread"],
+        commission=cost["commission"],
+        slippage=cost["slippage"],
+        macro_bias=macro_bias,
+        timeframe_minutes=tf_min,
+        session_type=session_type,
+    )
+    res_val = backtest(
+        df_val,
+        spread=cost["spread"],
+        commission=cost["commission"],
+        slippage=cost["slippage"],
+        macro_bias=macro_bias,
+        timeframe_minutes=tf_min,
+        session_type=session_type,
+    )
+    res_oos = backtest(
+        df_oos,
+        spread=cost["spread"],
+        commission=cost["commission"],
+        slippage=cost["slippage"],
+        macro_bias=macro_bias,
+        timeframe_minutes=tf_min,
+        session_type=session_type,
+    )
+    res_full = backtest(
+        df,
+        spread=cost["spread"],
+        commission=cost["commission"],
+        slippage=cost["slippage"],
+        macro_bias=macro_bias,
+        timeframe_minutes=tf_min,
+        session_type=session_type,
+    )
 
     t_train = res_train.pop("trades_frame")
     t_val = res_val.pop("trades_frame")
@@ -76,6 +115,7 @@ def evaluate_wf_split(df: pd.DataFrame, cost: dict, macro_bias: int, tf_min: int
         "bars_oos": len(df_oos),
         "trades_oos_count": len(t_oos),
         "trades_full_count": len(t_full),
+        "funnel_counts": res_full.get("funnel_counts", {}),
     }
 
 def run_all_matrices() -> dict:
@@ -124,6 +164,7 @@ def run_all_matrices() -> dict:
 
     for source, sym in all_symbols:
         cost = COST_SPEC[sym]
+        session_type = "binance" if source == "BINANCE" else "mt5"
         for tf in TIMEFRAMES:
             tf_min = 5 if tf == "M5" else 15
             key = f"{source}_{sym}_{tf}"
@@ -145,37 +186,48 @@ def run_all_matrices() -> dict:
                     }
                     continue
 
-                # Macro bias: 0 for Autonomous; for Begonya_Macro, read trend filter (e.g. 1 if bullish, -1 if bearish)
-                # or evaluate macro gate
                 if mode == "Autonomous":
                     macro_bias = 0
                 else:
-                    # In macro mode: use long-term trend bias (+1 if last close > 200 SMA on 15m/60m, -1 otherwise)
+                    # Begonya macro anchored: 200 SMA long-term directional anchor
                     sma200 = df["close"].rolling(200).mean().iloc[-1]
                     macro_bias = 1 if df["close"].iloc[-1] > sma200 else -1
 
                 t_start = time.time()
-                wf_data = evaluate_wf_split(df, cost, macro_bias=macro_bias, tf_min=tf_min)
+                wf_data = evaluate_wf_split(
+                    df,
+                    cost,
+                    macro_bias=macro_bias,
+                    tf_min=tf_min,
+                    session_type=session_type,
+                )
                 elapsed = time.time() - t_start
 
-                # Decision rule for Whitelist:
-                # 1. Out-of-sample Net PnL > 0
-                # 2. Out-of-sample trades >= 15
+                # Whitelist Multi-Period Decision Rules:
+                # 1. Out-of-sample trades >= 15
+                # 2. Out-of-sample Net PnL > 0
                 # 3. Out-of-sample Profit Factor > 1.15
                 # 4. Out-of-sample Max Drawdown < 25%
+                # 5. Multi-period stability: Train Net PnL >= 0 and Full Net PnL >= 0
                 oos = wf_data["oos"]
+                train = wf_data["train"]
+                full = wf_data["full"]
+
                 trades_oos = wf_data["trades_oos_count"]
                 oos_net = oos.get("net_pnl", 0.0)
                 oos_pf = oos.get("profit_factor", 0.0)
                 oos_dd = oos.get("max_drawdown_pct", 1.0)
+                train_net = train.get("net_pnl", 0.0)
+                full_net = full.get("net_pnl", 0.0)
 
-                if trades_oos >= 15 and oos_net > 0 and oos_pf > 1.15 and oos_dd < 0.25:
+                if trades_oos >= 15 and oos_net > 0 and oos_pf > 1.15 and oos_dd < 0.25 and full_net > 0 and train_net > 0:
                     decision = "WHITELISTED"
                 elif trades_oos < 15:
                     decision = "INCONCLUSIVE"
                 else:
                     decision = "REJECTED"
 
+                fc = wf_data.get("funnel_counts", {})
                 results[combo_name] = {
                     "status": decision,
                     "symbol": sym,
@@ -186,8 +238,24 @@ def run_all_matrices() -> dict:
                     "execution_time_sec": round(elapsed, 2),
                     "cost_parameters": cost,
                     "walk_forward": wf_data,
+                    "funnel_summary": {
+                        "bars_evaluated": fc.get("bars_evaluated", 0),
+                        "veto_session_hours": fc.get("veto_session_hours", 0),
+                        "veto_random_walk": fc.get("veto_random_walk", 0),
+                        "regime_ou_mr": fc.get("regime_ou_mr_bars", 0),
+                        "regime_kalman_mom": fc.get("regime_kalman_mom_bars", 0),
+                        "passed_ou_hl": fc.get("passed_ou_halflife", 0),
+                        "passed_yz_vol": fc.get("passed_yz_vol", 0),
+                        "passed_z_setup": fc.get("passed_zscore_setup", 0),
+                        "rejected_high_cost_to_sl": fc.get("rejected_high_cost_to_sl", 0),
+                        "rejected_low_rr": fc.get("rejected_low_rr", 0),
+                        "trades_opened": fc.get("trades_opened", 0),
+                    },
                 }
-                logger.info("-> Decision: %s | OOS Trades: %d | OOS PnL: %.2f | OOS PF: %.2f", decision, trades_oos, oos_net, oos_pf)
+                logger.info(
+                    "-> Decision: %s | OOS Trades: %d | OOS PnL: %.2f | OOS PF: %.2f | Full PnL: %.2f | Funnel Open: %d",
+                    decision, trades_oos, oos_net, oos_pf, full_net, fc.get("trades_opened", 0)
+                )
 
     # Save complete matrix results
     out_dir = Path("reports")

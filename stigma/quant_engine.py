@@ -35,17 +35,15 @@ def calculate_hurst_vr(
       - Log-prices y = ln(P).
       - For lag tau in lags: Var(y_{t+tau} - y_t) ~ tau^{2H}.
       - Slope of log(Var) vs log(tau) yields 2H via OLS regression.
-      - Finite sample properties: In 100-bar windows, Hurst estimation carries sample
-        variance; strict multi-hurdle classification is applied.
       - Lo-MacKinlay Variance Ratio:
           VR(q) = 1 + 2 * sum_{k=1}^{q-1} (1 - k/q) * rho_k
         where rho_k is the sample autocorrelation of log-returns.
-      - Classification:
-          0.46 <= H <= 0.54                -> RANDOM_WALK_VETO
-          H < 0.46 and VR < 0.92           -> OU_MEAN_REVERSION
-          H > 0.54 and VR > 1.08           -> KALMAN_MOMENTUM
-          Otherwise                        -> NO_EDGE
-          Insufficient data / non-finite   -> INSUFFICIENT_DATA
+      - Classification rules:
+          0.47 <= H <= 0.53 and 0.95 <= VR <= 1.05 -> RANDOM_WALK_VETO (pure noise)
+          H < 0.47 or (H < 0.50 and VR < 0.90)     -> OU_MEAN_REVERSION
+          H > 0.53 or (H > 0.50 and VR > 1.10)     -> KALMAN_MOMENTUM
+          Otherwise                                -> NO_EDGE
+          Insufficient data / non-finite           -> INSUFFICIENT_DATA
     """
     y = np.asarray(log_prices, dtype=float)
     if y.ndim != 1 or window < 32 or len(y) < window:
@@ -67,8 +65,6 @@ def calculate_hurst_vr(
 
     # Fast closed-form OLS when all 4 standard lags are valid
     if good.sum() == len(taus) and len(taus) == 4 and np.array_equal(taus, [2, 4, 8, 16]):
-        # ln_taus = ln(2)*[1, 2, 3, 4], mean=2.5*ln(2), denom=5*(ln(2))^2
-        # weights = [-1.5, -0.5, 0.5, 1.5] / (5 * ln(2))
         inv_denom = 1.0 / (5.0 * np.log(2.0))
         ln_vars = np.log(variances)
         slope = (-1.5 * ln_vars[0] - 0.5 * ln_vars[1] + 0.5 * ln_vars[2] + 1.5 * ln_vars[3]) * inv_denom
@@ -93,11 +89,11 @@ def calculate_hurst_vr(
 
     if not (np.isfinite(hurst) and np.isfinite(vr)):
         label = "INSUFFICIENT_DATA"
-    elif 0.46 <= hurst <= 0.54:
+    elif 0.47 <= hurst <= 0.53 and 0.95 <= vr <= 1.05:
         label = "RANDOM_WALK_VETO"
-    elif hurst < 0.46 and vr < 0.92:
+    elif hurst < 0.47 or (hurst < 0.50 and vr < 0.90):
         label = "OU_MEAN_REVERSION"
-    elif hurst > 0.54 and vr > 1.08:
+    elif hurst > 0.53 or (hurst > 0.50 and vr > 1.10):
         label = "KALMAN_MOMENTUM"
     else:
         label = "NO_EDGE"
@@ -109,18 +105,20 @@ def run_kalman_filter_1d(
     atr,
     process_noise: float = 1e-4,
     measurement_noise: float = 1e-3,
-    scale_invariant: bool = True,
+    adaptive: bool = True,
 ) -> KalmanResult:
-    """Constant-velocity two-state Kalman filter, O(N), causal.
+    """Adaptive or static constant-velocity two-state Kalman filter, O(N), causal.
+
+    In adaptive mode:
+      - Local measurement noise R_i = max((0.5 * atr[i]) ** 2, 1e-12)
+      - Local process noise Q_i = 0.02 * R_i
+      - Eliminates nominal asset price distortion across FX, Metals, Indices, and Crypto.
 
     State vector: x_t = [level, velocity]^T
     Transition:   F = [[1, 1], [0, 1]]
-    Process noise covariance: Q = process_noise * [[0.25, 0.5], [0.5, 1.0]]
-    Measurement model: H = [1, 0], R = max(measurement_noise, 1e-12)
-
+    Observation:  H = [1, 0]
     Innovation Z-score:
         Z_K = (P_t - x_hat_{t|t-1}[0]) / max(sqrt(S_t), 0.5 * ATR14)
-    Only uses past and current closed bars.
     """
     p = np.asarray(prices, dtype=float)
     a = np.broadcast_to(np.asarray(atr, dtype=float), p.shape)
@@ -141,20 +139,40 @@ def run_kalman_filter_1d(
     x0 = float(p[i0])
     x1 = 0.0
 
-    # Asset-class scale invariance: normalize nominal price units to base 100
-    scale = (x0 / 100.0) ** 2 if (scale_invariant and x0 > 0) else 1.0
+    if adaptive:
+        ai0 = a[i0] if (np.isfinite(a[i0]) and a[i0] > 0) else 0.001 * x0
+        r_init = max((0.5 * ai0) ** 2, 1e-12)
+        c00 = r_init
+        c01 = 0.0
+        c11 = r_init
+    else:
+        c00 = 1.0
+        c01 = 0.0
+        c11 = 1.0
 
-    c00 = 1.0 * scale
-    c01 = 0.0
-    c11 = 1.0 * scale
+    level[i0] = x0
+    velocity[i0] = 0.0
+    std[i0] = np.sqrt(c00)
+    z[i0] = 0.0
 
-    r = float(max(measurement_noise * scale, 1e-12))
-    q00 = 0.25 * process_noise * scale
-    q01 = 0.5 * process_noise * scale
-    q11 = 1.0 * process_noise * scale
-
-    for i in range(i0, n):
+    for i in range(i0 + 1, n):
         pi = p[i]
+        ai = a[i]
+
+        if adaptive:
+            # Dynamic variance scaling based on local ATR
+            sig_i = 0.5 * ai if (np.isfinite(ai) and ai > 0) else (0.5 * a[i - 1] if (np.isfinite(a[i - 1]) and a[i - 1] > 0) else 1e-4)
+            r_val = max(sig_i ** 2, 1e-12)
+            q_val = 0.02 * r_val
+            q00 = 0.25 * q_val
+            q01 = 0.5 * q_val
+            q11 = 1.0 * q_val
+        else:
+            r_val = float(max(measurement_noise, 1e-12))
+            q00 = 0.25 * process_noise
+            q01 = 0.5 * process_noise
+            q11 = 1.0 * process_noise
+
         if not np.isfinite(pi) or pi <= 0:
             # Propagate unobserved state forward without measurement update
             x0 = x0 + x1
@@ -165,35 +183,34 @@ def run_kalman_filter_1d(
             velocity[i] = x1
             continue
 
-        if i > i0:
-            # Predict step
-            x0 = x0 + x1
-            c00 = c00 + 2.0 * c01 + c11 + q00
-            c01 = c01 + c11 + q01
-            c11 = c11 + q11
+        # Predict step
+        x0 = x0 + x1
+        c00_pred = c00 + 2.0 * c01 + c11 + q00
+        c01_pred = c01 + c11 + q01
+        c11_pred = c11 + q11
 
+        # Innovation step
         innovation = pi - x0
-        S = c00 + r
+        S = c00_pred + r_val
         s_val = max(S, 1e-12)
 
-        k0 = c00 / s_val
-        k1 = c01 / s_val
+        k0 = c00_pred / s_val
+        k1 = c01_pred / s_val
 
         # Update state
         x0 += k0 * innovation
         x1 += k1 * innovation
 
-        # Update covariance (Joseph-stabilized symmetric form)
-        c11 = max(c11 - k1 * c01, 1e-14)
-        c00 = max((1.0 - k0) * c00, 1e-14)
-        c01 = (1.0 - k0) * c01
+        # Update covariance (Joseph stabilized symmetric form)
+        c11 = max(c11_pred - k1 * c01_pred, 1e-14)
+        c00 = max((1.0 - k0) * c00_pred, 1e-14)
+        c01 = (1.0 - k0) * c01_pred
 
         level[i] = x0
         velocity[i] = x1
         std_val = np.sqrt(s_val)
         std[i] = std_val
 
-        ai = a[i]
         floor = max(0.5 * ai, 1e-12) if np.isfinite(ai) and ai > 0 else 1e-12
         z[i] = innovation / max(std_val, floor)
 
@@ -258,7 +275,6 @@ def yang_zhang_volatility(
 
     total_var = vo_vec + k * vc_vec + (1.0 - k) * vr_vec
     out = np.sqrt(np.maximum(total_var, 0.0))
-    # Ensure first window bars remain NaN
     out[:window] = np.nan
     return out
 
@@ -266,12 +282,12 @@ def estimate_ou_half_life(
     spread,
     min_phi: float = -0.02,
 ) -> dict[str, float | bool]:
-    """OLS Delta X_t = alpha + phi * X_{t-1} + epsilon_t; valid half-life is 2–30 bars.
+    """OLS Delta X_t = alpha + phi * X_{t-1} + epsilon_t; valid half-life is 2–40 bars.
 
     Theoretical Ornstein-Uhlenbeck formulation:
       theta = -ln(1 + phi)
       half_life = ln(2) / theta
-    Valid mean-reversion requires phi < min_phi (default -0.02) and 2 <= half_life <= 30.
+    Valid mean-reversion requires phi < min_phi (default -0.02) and 2.0 <= half_life <= 40.0.
     """
     x = np.asarray(spread, dtype=float)
     if len(x) < 20 or not np.isfinite(x).all():
@@ -298,7 +314,7 @@ def estimate_ou_half_life(
         theta = -np.log1p(phi)
         hl = float(np.log(2.0) / theta) if theta > 0 else float("inf")
 
-    valid = bool(np.isfinite(hl) and 2.0 <= hl <= 30.0)
+    valid = bool(np.isfinite(hl) and 2.0 <= hl <= 40.0)
     return {
         "alpha": float(alpha) if np.isfinite(alpha) else float("nan"),
         "phi": float(phi) if np.isfinite(phi) else float("nan"),
@@ -326,59 +342,136 @@ def evaluate_stigma_trigger(
     close,
     variance_ratio: float = float("nan"),
     macro_bias: int = 0,
-) -> dict[str, Any] | None:
-    """Evaluate causal trigger conditions for OU_MEAN_REVERSION and KALMAN_MOMENTUM."""
+    cost_price: float = 0.0,
+    sigma_yz: float = float("nan"),
+    sigma_yz_median: float = float("nan"),
+    return_reason: bool = False,
+) -> dict[str, Any] | tuple[dict[str, Any] | None, str]:
+    """Evaluate causal trigger conditions with Net R:R Gate and Cost-to-SL protection."""
+    def fail(reason: str):
+        return (None, reason) if return_reason else None
+
     arrays = [np.asarray(v, dtype=float) for v in (z_score, level, velocity, innovation_std, atr, open_, close)]
     z, x, v, s, a, o, c = arrays
     n = len(c)
 
     if n < 3 or any(len(q) != n for q in arrays):
-        return None
+        return fail("INSUFFICIENT_BARS")
     if not all(np.isfinite(q[-3:]).all() for q in arrays):
-        return None
+        return fail("NON_FINITE_DATA")
     if a[-1] <= 0 or not np.isfinite(hurst) or (o[-1] <= 0) or (c[-1] <= 0):
-        return None
+        return fail("INVALID_PRICES_OR_ATR")
     if macro_bias not in (-1, 0, 1):
-        return None
+        return fail("INVALID_MACRO_BIAS")
 
-    side = None
     entry = float(c[-1])
-    stop = tp1 = tp2 = None
-    hold = 24
     risk = 1.2 * float(a[-1])
 
-    # Mean-reversion regime
-    if regime == "OU_MEAN_REVERSION" and hurst < 0.46 and (np.isnan(variance_ratio) or variance_ratio < 0.92) and (2.0 <= half_life <= 30.0):
+    # Minimum SL / Spread protection (cost must not exceed 25% of stop distance)
+    if cost_price > 0 and risk < 4.0 * cost_price:
+        return fail("HIGH_COST_TO_SL")
+
+    side = None
+    stop = tp1 = tp2 = None
+    hold = 24
+
+    # 1. OU Mean-Reversion Regime
+    if regime == "OU_MEAN_REVERSION":
+        if not (2.0 <= half_life <= 40.0):
+            return fail("OU_HALFLIFE_OUT_OF_BOUNDS")
+
         hold = dynamic_time_stop(half_life)
-        if macro_bias >= 0 and np.min(z[-3:]) <= -2.0 and z[-1] > z[-2] and z[-1] >= -1.85 and c[-1] > o[-1]:
+
+        # Long Mean-Reversion setup
+        if np.min(z[-3:]) <= -2.0 and z[-1] > z[-2] and z[-1] >= -1.85 and c[-1] > o[-1]:
+            if macro_bias < 0:
+                return fail("MACRO_VETO_LONG")
             side = "LONG"
             stop = entry - risk
-            tp1 = max(float(x[-1]), entry + 1.1 * risk)
+            eff_entry = entry + 0.5 * cost_price
+
+            # Target 1: Kalman level; if closer than 1.1 R to effective entry, push forward to minimum 1.15 R
+            tp1_raw = float(x[-1])
+            if (tp1_raw - eff_entry) < 1.1 * risk:
+                tp1 = max(float(x[-1] + 0.5 * s[-1]), entry + 1.15 * risk)
+            else:
+                tp1 = tp1_raw
+
+            # Target 2: Mean-reversion extension
             tp2 = max(float(x[-1] + 1.2 * s[-1]), entry + 2.0 * risk)
-        elif macro_bias <= 0 and np.max(z[-3:]) >= 2.0 and z[-1] < z[-2] and z[-1] <= 1.85 and c[-1] < o[-1]:
+
+            # Net R:R verification for TP2
+            rr_tp2 = (tp2 - eff_entry) / risk
+            if rr_tp2 < 1.6:
+                return fail("LOW_RR")
+
+        # Short Mean-Reversion setup
+        elif np.max(z[-3:]) >= 2.0 and z[-1] < z[-2] and z[-1] <= 1.85 and c[-1] < o[-1]:
+            if macro_bias > 0:
+                return fail("MACRO_VETO_SHORT")
             side = "SHORT"
             stop = entry + risk
-            tp1 = min(float(x[-1]), entry - 1.1 * risk)
+            eff_entry = entry - 0.5 * cost_price
+
+            tp1_raw = float(x[-1])
+            if (eff_entry - tp1_raw) < 1.1 * risk:
+                tp1 = min(float(x[-1] - 0.5 * s[-1]), entry - 1.15 * risk)
+            else:
+                tp1 = tp1_raw
+
             tp2 = min(float(x[-1] - 1.2 * s[-1]), entry - 2.0 * risk)
 
-    # Kalman momentum regime (VR > 1.08 strictly enforced!)
-    elif regime == "KALMAN_MOMENTUM" and hurst > 0.54 and (np.isfinite(variance_ratio) and variance_ratio > 1.08) and abs(v[-1]) > 0.05 * a[-1]:
+            rr_tp2 = (eff_entry - tp2) / risk
+            if rr_tp2 < 1.6:
+                return fail("LOW_RR")
+
+    # 2. Kalman Momentum Regime
+    elif regime == "KALMAN_MOMENTUM":
+        # Check Yang-Zhang volatility expansion
+        if np.isfinite(sigma_yz) and np.isfinite(sigma_yz_median) and sigma_yz <= sigma_yz_median:
+            return fail("YZ_VOL_NOT_EXPANDING")
+
+        if abs(v[-1]) <= 0.05 * a[-1]:
+            return fail("INSUFFICIENT_VELOCITY")
+
         hold = 24
-        if macro_bias >= 0 and v[-1] > 0 and -1.2 <= z[-1] <= -0.15 and z[-1] > z[-2] and c[-1] > o[-1]:
+
+        # Long Momentum setup
+        if v[-1] > 0 and -1.2 <= z[-1] <= -0.15 and z[-1] > z[-2] and c[-1] > o[-1]:
+            if macro_bias < 0:
+                return fail("MACRO_VETO_LONG")
             side = "LONG"
             stop = entry - risk
+            eff_entry = entry + 0.5 * cost_price
             tp1 = entry + 1.4 * risk
             tp2 = entry + 2.6 * risk
-        elif macro_bias <= 0 and v[-1] < 0 and 0.15 <= z[-1] <= 1.2 and z[-1] < z[-2] and c[-1] < o[-1]:
+
+            rr_tp2 = (tp2 - eff_entry) / risk
+            if rr_tp2 < 1.6:
+                return fail("LOW_RR")
+
+        # Short Momentum setup
+        elif v[-1] < 0 and 0.15 <= z[-1] <= 1.2 and z[-1] < z[-2] and c[-1] < o[-1]:
+            if macro_bias > 0:
+                return fail("MACRO_VETO_SHORT")
             side = "SHORT"
             stop = entry + risk
+            eff_entry = entry - 0.5 * cost_price
             tp1 = entry - 1.4 * risk
             tp2 = entry - 2.6 * risk
 
-    if side is None or stop is None or tp1 is None or tp2 is None:
-        return None
+            rr_tp2 = (eff_entry - tp2) / risk
+            if rr_tp2 < 1.6:
+                return fail("LOW_RR")
 
-    return {
+    if side is None or stop is None or tp1 is None or tp2 is None:
+        return fail("SETUP_NOT_TRIGGERED")
+
+    eff_entry = entry + (0.5 * cost_price if side == "LONG" else -0.5 * cost_price)
+    rr1 = abs(tp1 - eff_entry) / risk
+    rr2 = abs(tp2 - eff_entry) / risk
+
+    sig_data = {
         "side": side,
         "entry": entry,
         "stop_loss": float(stop),
@@ -390,4 +483,7 @@ def evaluate_stigma_trigger(
         "variance_ratio": float(variance_ratio),
         "half_life": float(half_life),
         "risk": float(risk),
+        "rr_tp1": float(rr1),
+        "rr_tp2": float(rr2),
     }
+    return (sig_data, "SUCCESS") if return_reason else sig_data

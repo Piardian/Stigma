@@ -100,3 +100,42 @@ The engine maintains a strict single-position lock. While a trade is active, new
 * **Execution Bridge (`stigma/execution_bridge.py`):**
   * Live order execution is permanently disabled by default.
   * Emits validated `order_intent` dictionaries with strict geometric checks for external research systems.
+
+---
+
+## 5. Phase 2 Structural Defects & Engineering Resolutions
+
+In Phase 2, deep funnel telemetry uncovered 4 core architectural bottlenecks that caused trade starvation (0–11 trades per 50,000 bars) and negative expectancy in preliminary runs:
+
+### Defect A: Missing Net R:R Gate and Cost-to-SL Armor
+* **Problem:** In mean reversion, `Stop Loss = 1.2 * ATR`, but `TP1` was set directly to the Kalman level $\hat{x}_t$, which was often only $0.3\text{--}0.5 \times \text{ATR}$ away. Taking $0.3\text{--}0.5 R$ profit against $1.0 R$ risk under real broker spreads and fees guaranteed negative expectancy.
+* **Resolution:**
+  1. `cost_price` (spread + commission + slippage) is evaluated at entry.
+  2. If $\text{risk} < 4.0 \times \text{cost\_price}$, the trade is vetoed with `"HIGH_COST_TO_SL"`.
+  3. If $\text{TP1} < 1.1 R$, it is dynamically shifted to $\ge 1.15 R$.
+  4. If net $\text{TP2} < 1.6 R$, the trade is vetoed with `"LOW_RR"`.
+
+### Defect B: Static vs. Adaptive Kalman Filter & Unused Yang–Zhang Volatility
+* **Problem:** Fixed noise parameters ($Q = 10^{-4}, R = 10^{-3}$) caused Kalman filter tracking errors to drift across changing volatility regimes. Furthermore, Yang–Zhang volatility was calculated but unused.
+* **Resolution:**
+  1. Converted to an **Adaptive Kalman Filter**: dynamic measurement noise $R_i = \max((0.5 \cdot \text{ATR}_i)^2, 10^{-12})$ and process noise $Q_i = 0.02 R_i$.
+  2. Integrated Yang–Zhang volatility into `KALMAN_MOMENTUM`: momentum trades require current volatility to be expanding relative to its 50-bar median ($\sigma_{YZ, t} > \text{median}_{50}(\sigma_{YZ})$).
+
+### Defect C: Fractal Bottleneck & Calibration of OU Half-Life
+* **Problem:** Requiring both $H < 0.46$ and $VR < 0.92$ on a 100-bar sample led to 85% of bars being discarded as `NO_EDGE` due to finite-sample estimation noise. The OU half-life regression window (250 bars) was too slow for intraday regime shifts.
+* **Resolution:**
+  1. Recalibrated regime classification:
+     * $0.47 \le H \le 0.53$ and $0.95 \le VR \le 1.05 \implies \text{RANDOM\_WALK\_VETO}$.
+     * $H < 0.47$ or ($H < 0.50$ and $VR < 0.90$) $\implies \text{OU\_MEAN\_REVERSION}$.
+     * $H > 0.53$ or ($H > 0.50$ and $VR > 1.10$) $\implies \text{KALMAN\_MOMENTUM}$.
+  2. Calibrated OU regression window to **120 bars** with valid half-life range $2.0 \le T_{1/2} \le 40.0$ bars.
+
+### Defect D: Missing Institutional Session & Weekend Armor
+* **Problem:** Trades opened during overnight/rollover periods suffered extreme spread spikes and low liquidity.
+* **Resolution:**
+  1. Enforced active institutional trading hours (MT5: 06:00–20:00 UTC; Binance: 08:00–22:00 UTC).
+  2. Friday 20:30 UTC new entry veto and Friday 21:30 UTC forced position closure (`WEEKEND_CLOSE`).
+
+### Funnel Diagnostics Telemetry
+Added complete `funnel_counts` tracking every bar across 11 rejection gates (`bars_evaluated`, `veto_session_hours`, `veto_random_walk`, `regime_ou_mr_bars`, `regime_kalman_mom_bars`, `passed_ou_halflife`, `passed_yz_vol`, `passed_zscore_setup`, `passed_turn_and_candle`, `rejected_high_cost_to_sl`, `rejected_low_rr`, `trades_opened`).
+

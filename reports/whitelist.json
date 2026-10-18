@@ -1,21 +1,23 @@
 {
-  "version": "1.0.0",
-  "decision_timestamp_utc": "2026-10-18T14:15:00Z",
+  "version": "2.0.0",
+  "decision_timestamp_utc": "2026-10-18T18:00:00Z",
   "whitelist_criteria": {
     "min_oos_trades": 20,
     "min_oos_profit_factor": 1.25,
     "max_drawdown_pct": 0.20,
     "walk_forward_stability": "Consistent positive expectancy across Train, Validation, and Out-of-Sample",
-    "cost_inclusion": "Real broker spread, commission, and adverse slippage included"
+    "cost_inclusion": "Real broker spread, commission, and adverse slippage included",
+    "session_filter": "Active institutional trading hours enforced",
+    "rr_filter": "Net R:R >= 1.6 and Risk >= 4.0 * Cost"
   },
   "whitelisted_strategies": [],
   "summary": {
     "total_evaluated": 28,
     "whitelisted": 0,
-    "rejected": 6,
-    "inconclusive": 22,
+    "rejected": 14,
+    "inconclusive": 14,
     "blocked": 0,
     "status": "EMPTY_WHITELIST",
-    "rationale": "No candidate combination met the multi-period stability criteria. Candidates with positive OOS periods (e.g. NAS100 M5/M15, EURUSD M15) showed negative Train/Validation expectancy, indicating regime clustering or sample variance rather than true stationary statistical edge under transaction costs."
+    "rationale": "No candidate combination met the multi-period stability criteria. While sample size starvation was eliminated (generating 100-258 trades per instrument on M15), and localized OOS gains appeared in XAUUSD M5 and SOLUSDT M15 under Begonya Macro, Train/Validation divergence confirms lack of stationary edge under real broker transaction costs."
   }
 }

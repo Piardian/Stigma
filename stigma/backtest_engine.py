@@ -1,14 +1,14 @@
-"""Causal, bar-by-bar walk-forward backtest utilities.
+"""Causal, bar-by-bar walk-forward backtest utilities with Funnel Diagnostics.
 
-All calculations strictly causal:
-  - Features evaluated on closed bar i.
-  - Entry order executed on bar i+1 Open.
-  - Geometry: Entry shifts with Next Open, preserving exact stop and target distance.
-  - Gap Stop: If bar opens beyond stop, execution occurs at Open (not stale stop).
-  - Intrabar Conflict: If stop and target both fall in the same candle, stop is checked first (conservative).
-  - TP1 / TP2 Management: Institutional scale-out; 50% locked in at TP1, stop trailed to breakeven (entry), 50% targeting TP2.
-  - Single-Position: Strictly one position at a time (no concurrent positions, no signal leakage).
-  - Realistic Costs: Spread, commission, and slippage explicitly deducted.
+Features:
+  - Adaptive 2-state Kalman Filter with dynamic variance scaling.
+  - Relaxed double-fractal regime classification (Hurst + Lo-MacKinlay VR).
+  - Net R:R Gate: Pre-trade evaluation of effective entry, relocation of close TP1 (min 1.15 R),
+    and rejection of unfavorable geometries (TP2 < 1.6 R).
+  - Cost-to-SL Protection: Rejects trades where cost exceeds 25% of stop-loss distance.
+  - Institutional Session & Weekend Guard: Active trading hours (London/NY, Crypto windows)
+    with Friday evening entry veto and weekend forced close.
+  - Complete Funnel Diagnostics (funnel_counts) tracking bar-by-bar filtration.
 """
 from __future__ import annotations
 from typing import Any
@@ -32,8 +32,8 @@ def atr14(df: pd.DataFrame) -> np.ndarray:
     ], axis=1).max(axis=1)
     return tr.rolling(14, min_periods=14).mean().to_numpy()
 
-def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
-    """Precompute causal features: ATR14, Yang-Zhang sigma, Kalman filter state."""
+def prepare_features(df: pd.DataFrame, *, adaptive_kalman: bool = True) -> pd.DataFrame:
+    """Precompute causal features: ATR14, Yang-Zhang sigma, 50-bar median YZ, Adaptive Kalman state."""
     required = {"open", "high", "low", "close"}
     if not required.issubset(df.columns):
         raise ValueError(f"Missing required OHLC columns: {required - set(df.columns)}")
@@ -55,14 +55,59 @@ def prepare_features(df: pd.DataFrame) -> pd.DataFrame:
 
     out["atr14"] = atr14(out)
     out["sigma_yz"] = yang_zhang_volatility(o, h, l, c)
+    out["sigma_yz_median50"] = out["sigma_yz"].rolling(50, min_periods=20).median()
 
-    k = run_kalman_filter_1d(c, out["atr14"].to_numpy())
+    k = run_kalman_filter_1d(c, out["atr14"].to_numpy(), adaptive=adaptive_kalman)
     out["kalman_level"] = k.level
     out["kalman_velocity"] = k.velocity
     out["innovation_std"] = k.innovation_std
     out["z_k"] = k.z_score
 
     return out
+
+def check_session_rules(
+    dt: pd.Timestamp,
+    session_type: str = "auto",
+) -> tuple[bool, bool]:
+    """Check if session is active for new entry and if Friday weekend exit is required.
+
+    Returns:
+      (can_enter, should_force_close_weekend)
+    """
+    if not isinstance(dt, pd.Timestamp):
+        return True, False
+
+    hour = dt.hour
+    minute = dt.minute
+    dow = dt.dayofweek  # 0=Monday, 4=Friday, 5=Saturday, 6=Sunday
+
+    st = session_type.lower()
+    if st == "all":
+        return True, False
+
+    is_crypto = (st in ("binance", "crypto"))
+
+    if is_crypto:
+        # Binance active hours: 08:00 - 22:00 UTC (high liquidity window)
+        can_enter = (8 <= hour < 22)
+        return can_enter, False
+    else:
+        # MT5 (Forex, Metals, Indices): London & NY sessions 06:00 - 20:00 UTC
+        # Weekend: Saturday / Sunday closed
+        if dow in (5, 6):
+            return False, False
+
+        # Friday restrictions:
+        # After 20:30 UTC: no new entries
+        # After 21:30 UTC: force close open positions before weekend
+        if dow == 4:
+            if hour > 21 or (hour == 21 and minute >= 30):
+                return False, True
+            if hour > 20 or (hour == 20 and minute >= 30):
+                return False, False
+
+        can_enter = (6 <= hour < 20)
+        return can_enter, False
 
 def backtest(
     df: pd.DataFrame,
@@ -76,26 +121,41 @@ def backtest(
     risk_per_trade_pct: float = 0.01,
     max_position_size: float = 10.0,
     tp_mode: str = "scale_out",
+    session_type: str = "auto",
+    adaptive_kalman: bool = True,
 ) -> dict[str, Any]:
-    """Causal, realistic single-position simulator.
-
-    Parameters:
-      df: DataFrame with DatetimeIndex and open, high, low, close columns.
-      spread: Round-trip spread in price units.
-      commission: Round-trip commission in price units.
-      slippage: Adverse slippage per round-trip in price units.
-      macro_bias: -1, 0, or +1.
-      timeframe_minutes: Bar interval (5 or 15).
-      initial_capital: Account starting equity.
-      risk_per_trade_pct: Fraction of capital risked per trade (0.01 = 1%).
-      max_position_size: Maximum allowed position units.
-      tp_mode: 'scale_out' (50% at TP1 with BE stop trailing, 50% at TP2) or 'tp2_only'.
-    """
-    f = prepare_features(df)
+    """Causal, realistic single-position simulator with Funnel Telemetry."""
+    f = prepare_features(df, adaptive_kalman=adaptive_kalman)
     n = len(f)
     trades: list[dict[str, Any]] = []
     position: dict[str, Any] | None = None
     warm = 120
+
+    # Auto-detect session type if 'auto'
+    if session_type == "auto":
+        # If Saturday or Sunday present in data, it is crypto (24/7)
+        dows = f.index.dayofweek
+        if (dows == 5).any() or (dows == 6).any():
+            eff_session = "binance"
+        else:
+            eff_session = "mt5"
+    else:
+        eff_session = session_type
+
+    funnel = {
+        "bars_evaluated": 0,
+        "veto_session_hours": 0,
+        "veto_random_walk": 0,
+        "regime_ou_mr_bars": 0,
+        "regime_kalman_mom_bars": 0,
+        "passed_ou_halflife": 0,
+        "passed_yz_vol": 0,
+        "passed_zscore_setup": 0,
+        "passed_turn_and_candle": 0,
+        "rejected_high_cost_to_sl": 0,
+        "rejected_low_rr": 0,
+        "trades_opened": 0,
+    }
 
     closes = f.close.to_numpy()
     opens = f.open.to_numpy()
@@ -106,7 +166,11 @@ def backtest(
     innovation_stds = f.innovation_std.to_numpy()
     z_scores = f.z_k.to_numpy()
     atrs = f.atr14.to_numpy()
+    sigmas_yz = f.sigma_yz.to_numpy()
+    sigmas_yz_med = f.sigma_yz_median50.to_numpy()
     times = f.index
+
+    total_cost = spread + commission + slippage
 
     for i in range(warm, n - 1):
         nxt_open = float(opens[i + 1])
@@ -114,6 +178,8 @@ def backtest(
         nxt_low = float(lows[i + 1])
         nxt_close = float(closes[i + 1])
         nxt_time = times[i + 1]
+
+        can_enter, should_force_close_weekend = check_session_rules(nxt_time, eff_session)
 
         # -----------------------------------------------------------------
         # 1. Manage Active Position (Single-position lock)
@@ -127,7 +193,12 @@ def backtest(
             reason = None
             exit_price = None
 
-            if side == "LONG":
+            # Friday weekend force close
+            if should_force_close_weekend:
+                exit_price = nxt_open
+                reason = "weekend_close"
+
+            elif side == "LONG":
                 # Conservative rule: check stop BEFORE target
                 if nxt_open <= stop:
                     exit_price = nxt_open
@@ -136,14 +207,13 @@ def backtest(
                     exit_price = stop
                     reason = "stop"
                 else:
-                    # Check targets
                     if tp_mode == "scale_out":
                         if not position["tp1_hit"]:
                             if nxt_open >= tp1:
                                 position["tp1_hit"] = True
                                 position["tp1_exit_price"] = nxt_open
                                 position["tp1_exit_bar"] = position["bars"]
-                                position["stop_loss"] = position["entry"]  # Move stop to breakeven
+                                position["stop_loss"] = position["entry"]
                                 if nxt_open >= tp2:
                                     exit_price = nxt_open
                                     reason = "gap_tp2"
@@ -154,12 +224,11 @@ def backtest(
                                 position["tp1_hit"] = True
                                 position["tp1_exit_price"] = tp1
                                 position["tp1_exit_bar"] = position["bars"]
-                                position["stop_loss"] = position["entry"]  # Move stop to breakeven
+                                position["stop_loss"] = position["entry"]
                                 if nxt_high >= tp2:
                                     exit_price = tp2
                                     reason = "tp2"
                         else:
-                            # TP1 already hit on an earlier bar; stop is at breakeven
                             if nxt_open <= position["stop_loss"]:
                                 exit_price = nxt_open
                                 reason = "breakeven_gap_stop"
@@ -181,7 +250,6 @@ def backtest(
                             reason = "tp2"
 
             else:  # SHORT
-                # Conservative rule: check stop BEFORE target
                 if nxt_open >= stop:
                     exit_price = nxt_open
                     reason = "gap_stop"
@@ -195,7 +263,7 @@ def backtest(
                                 position["tp1_hit"] = True
                                 position["tp1_exit_price"] = nxt_open
                                 position["tp1_exit_bar"] = position["bars"]
-                                position["stop_loss"] = position["entry"]  # Move stop to breakeven
+                                position["stop_loss"] = position["entry"]
                                 if nxt_open <= tp2:
                                     exit_price = nxt_open
                                     reason = "gap_tp2"
@@ -206,7 +274,7 @@ def backtest(
                                 position["tp1_hit"] = True
                                 position["tp1_exit_price"] = tp1
                                 position["tp1_exit_bar"] = position["bars"]
-                                position["stop_loss"] = position["entry"]  # Move stop to breakeven
+                                position["stop_loss"] = position["entry"]
                                 if nxt_low <= tp2:
                                     exit_price = tp2
                                     reason = "tp2"
@@ -231,16 +299,13 @@ def backtest(
                             exit_price = tp2
                             reason = "tp2"
 
-            # Check time-stop if position has not exited
             if reason is None and position["bars"] >= position["max_hold_bars"]:
                 exit_price = nxt_close
                 reason = "time_stop"
 
-            # If position exited, record trade
             if reason is not None and exit_price is not None:
                 entry = position["entry"]
                 direction = 1 if side == "LONG" else -1
-                total_cost = spread + commission + slippage
                 units = position["units"]
                 initial_risk = position["initial_risk"]
 
@@ -269,22 +334,47 @@ def backtest(
             continue
 
         # -----------------------------------------------------------------
-        # 2. Evaluate Signals (Only when flat)
+        # 2. Evaluate Signals (Only when flat) & Funnel Diagnostics
         # -----------------------------------------------------------------
-        hist_close = closes[max(0, i - 99):i + 1]
-        regime = calculate_hurst_vr(np.log(hist_close), window=min(100, len(hist_close)))
-        if regime.label not in ("OU_MEAN_REVERSION", "KALMAN_MOMENTUM"):
+        funnel["bars_evaluated"] += 1
+
+        if not can_enter:
+            funnel["veto_session_hours"] += 1
             continue
 
-        start = max(0, i - 250)
-        spread_series = closes[start:i + 1] - levels[start:i + 1]
-        ou = estimate_ou_half_life(spread_series)
+        hist_close = closes[max(0, i - 99):i + 1]
+        regime = calculate_hurst_vr(np.log(hist_close), window=min(100, len(hist_close)))
 
-        sig = evaluate_stigma_trigger(
+        if regime.label == "RANDOM_WALK_VETO":
+            funnel["veto_random_walk"] += 1
+            continue
+        elif regime.label == "OU_MEAN_REVERSION":
+            funnel["regime_ou_mr_bars"] += 1
+            start = max(0, i - 119)  # 120-bar local window
+            spread_series = closes[start:i + 1] - levels[start:i + 1]
+            ou = estimate_ou_half_life(spread_series)
+            if not ou["valid"]:
+                continue
+            funnel["passed_ou_halflife"] += 1
+            half_life_val = ou["half_life"]
+        elif regime.label == "KALMAN_MOMENTUM":
+            funnel["regime_kalman_mom_bars"] += 1
+            # Yang-Zhang volatility expansion check: current sigma > 50-bar median
+            curr_yz = sigmas_yz[i]
+            med_yz = sigmas_yz_med[i]
+            if not (np.isfinite(curr_yz) and np.isfinite(med_yz) and curr_yz > med_yz):
+                continue
+            funnel["passed_yz_vol"] += 1
+            half_life_val = float("nan")
+        else:
+            continue
+
+        # Evaluate trigger conditions with reason reporting
+        sig, reason = evaluate_stigma_trigger(
             regime=regime.label,
             hurst=regime.hurst,
             variance_ratio=regime.variance_ratio,
-            half_life=ou["half_life"],
+            half_life=half_life_val,
             z_score=z_scores[:i + 1],
             level=levels[:i + 1],
             velocity=velocities[:i + 1],
@@ -293,19 +383,36 @@ def backtest(
             open_=opens[:i + 1],
             close=closes[:i + 1],
             macro_bias=macro_bias,
+            cost_price=total_cost,
+            sigma_yz=sigmas_yz[i],
+            sigma_yz_median=sigmas_yz_med[i],
+            return_reason=True,
         )
 
-        if sig is not None:
-            # Entry executes on NEXT bar open
+        if reason in ("SETUP_NOT_TRIGGERED", "INSUFFICIENT_VELOCITY", "MACRO_VETO_LONG", "MACRO_VETO_SHORT"):
+            continue
+
+        funnel["passed_zscore_setup"] += 1
+        funnel["passed_turn_and_candle"] += 1
+
+        if reason == "HIGH_COST_TO_SL":
+            funnel["rejected_high_cost_to_sl"] += 1
+            continue
+        elif reason == "LOW_RR":
+            funnel["rejected_low_rr"] += 1
+            continue
+
+        if sig is not None and reason == "SUCCESS":
+            funnel["trades_opened"] += 1
+
+            # Order executes on NEXT bar open
             entry = nxt_open
-            # Shift SL and TP distances to match execution price
             shift = entry - float(closes[i])
             stop = float(sig["stop_loss"] + shift)
             tp1 = float(sig["tp1"] + shift)
             tp2 = float(sig["tp2"] + shift)
             initial_risk = abs(entry - stop)
 
-            # Position sizing
             risk_capital = initial_capital * risk_per_trade_pct
             units = min(risk_capital / initial_risk, max_position_size) if initial_risk > 1e-12 else 1.0
 
@@ -324,11 +431,10 @@ def backtest(
                 "bars": 0,
             }
 
-    # If position remains open at the end of the data, exit at final close
+    # Exit any lingering open position at final close
     if position is not None:
         exit_price = float(closes[-1])
         direction = 1 if position["side"] == "LONG" else -1
-        total_cost = spread + commission + slippage
         units = position["units"]
         initial_risk = position["initial_risk"]
 
@@ -362,6 +468,7 @@ def backtest(
         "exit_reason", "exit_time"
     ]
     t = pd.DataFrame(trades) if trades else pd.DataFrame(columns=trade_columns)
+
     if t.empty:
         return {
             "trades": 0,
@@ -377,6 +484,7 @@ def backtest(
             "long_trades": 0,
             "short_trades": 0,
             "trades_frame": t,
+            "funnel_counts": funnel,
         }
 
     wins = t.loc[t.net_pnl > 0, "net_pnl"].sum()
@@ -407,4 +515,5 @@ def backtest(
         "long_trades": int((t.side == "LONG").sum()),
         "short_trades": int((t.side == "SHORT").sum()),
         "trades_frame": t,
+        "funnel_counts": funnel,
     }
