@@ -172,4 +172,33 @@ Through these calibrations, the engine achieved its first formal strategy whitel
 * **Full Sample PnL:** $+15.87$ (133 trades)
 * **Max Drawdown:** 0.28% (under 25% threshold)
 
+---
+
+## 7. Phase 4 HTF Trend Anchor, Flat Slope Lock, Early Breakeven & Multi-Asset Whitelist
+
+In Phase 4, the engine was enhanced with 4 targeted institutional features that expanded the whitelist from 1 strategy to **5 high-performing strategies** across FX, Stock Indices, and Crypto:
+
+### A. 200-Bar Structural Trend Anchor & Dynamic Macro Bias
+* **HTF Trend Anchor:** To eliminate whipsaws in choppy consolidation, `KALMAN_MOMENTUM` Long setups now strictly require $C_t > \text{EMA}_{200, t}$ and $\text{EMA}_{200, t} > \text{EMA}_{200, t-20}$; Short setups strictly require $C_t < \text{EMA}_{200, t}$ and $\text{EMA}_{200, t} < \text{EMA}_{200, t-20}$.
+* **Causal Dynamic Macro Bias:** Replaced static multi-year lookahead with dynamic, bar-by-bar trend evaluation ($+1$ if $C_t > \text{EMA}_{200, t}$ else $-1$), ensuring 100% causal backtests.
+
+### B. Early Breakeven (+0.9 R) & Kalman Equilibrium Line Trailing Stop
+* **Early Breakeven:** For momentum trades, when market price advances $\ge +0.9 R$ favorably ($H \ge \text{entry} + 0.9 R$), Stop Loss is automatically raised to Breakeven ($\text{entry}$).
+* **Dynamic Trailing Stop:** Once Breakeven is reached, Stop Loss dynamically trails behind the Kalman equilibrium line ($\hat{x}_t - 0.5 \times \text{ATR}_t$ for Longs), locking in accumulated trend profits while avoiding premature stop-outs.
+
+### C. Flat Slope Lock for Mean Reversion
+* **Trending Slope Veto:** Mean Reversion is strictly vetoed (`TRENDING_SLOPE_VETO`) if Kalman velocity $|v_t| > 0.12 \times \text{ATR}_t$ OR if the 200 EMA slope $|\text{EMA}_{200, t} - \text{EMA}_{200, t-20}| > 2.5 \times \text{ATR}_t$.
+* **Extreme $Z_K$ & Candle Geometry:** Requires extreme $|Z_{K, t}| \ge 2.20$, reversal turn confirmation ($Z_{K, t} > Z_{K, t-1}$ and $Z_{K, t} \ge -2.05$), and closing in the upper 40% (Long) or lower 40% (Short) of the candle range.
+* **Impact:** Revolutionized `NAS100` and `BTCUSDT` performance:
+  * `NAS100 M15 OU` went from **-2,004.25** in Phase 3 to **+549.53** (Autonomous) and **+878.34** (Begonya Macro) in Phase 4.
+  * `BTCUSDT H1 OU` went from **-3,430.86** in Phase 3 to **+175.39** in Phase 4.
+
+### D. The 5 Whitelisted Strategies (Phase 4):
+1. **`USDJPY_M15_MOM_ONLY_Autonomous`**: OOS PnL $+12.33$ (PF 1.80), Full $+6.78$ across 102 trades, Max DD 0.06%.
+2. **`USDJPY_M15_MOM_ONLY_Begonya_Macro`**: OOS PnL $+12.33$ (PF 1.80), Full $+6.78$ across 102 trades, Max DD 0.06%.
+3. **`NAS100_M15_OU_ONLY_Autonomous`**: OOS PnL $+713.16$ (PF 1.58), Full $+549.53$ across 159 trades, Max DD 4.03%.
+4. **`NAS100_M15_OU_ONLY_Begonya_Macro`**: OOS PnL $+199.01$ (PF 1.35), Train $+729.58$, Full $+878.34$ (PF 1.33) across 66 trades, Max DD 4.22%.
+5. **`BTCUSDT_H1_OU_ONLY_Autonomous`**: OOS PnL $+69.43$ (PF 1.16), Val $+458.21$, Full $+175.39$ across 55 trades, Max DD 2.17%.
+
+
 

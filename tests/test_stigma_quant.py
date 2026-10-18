@@ -166,11 +166,12 @@ def test_ou_half_life_extended_bounds():
         assert 2.0 <= res["half_life"] <= 40.0
 
 def test_dynamic_time_stop_clipping():
-    """int(clip(2.5 * half_life, 6, 40))."""
+    """int(clip(2.0 * half_life, 6, 24))."""
     assert dynamic_time_stop(1.0) == 6
-    assert dynamic_time_stop(4.0) == 10
-    assert dynamic_time_stop(15.0) == 37
-    assert dynamic_time_stop(20.0) == 40
+    assert dynamic_time_stop(4.0) == 8
+    assert dynamic_time_stop(10.0) == 20
+    assert dynamic_time_stop(15.0) == 24
+    assert dynamic_time_stop(20.0) == 24
 
 # =====================================================================
 # 5. NET R:R GATE & COST-TO-SL PROTECTION
@@ -178,7 +179,7 @@ def test_dynamic_time_stop_clipping():
 
 def test_cost_to_sl_protection():
     """Signals where risk < 3.5 * cost_price are rejected with HIGH_COST_TO_SL."""
-    # ATR is 0.1 -> risk = 1.6 * 0.1 = 0.16. If cost_price = 0.05 -> 3.5 * cost = 0.175 > risk
+    # ATR is 0.1 -> risk = 1.4 * 0.1 = 0.14. If cost_price = 0.05 -> 3.5 * cost = 0.175 > risk
     sig, reason = evaluate_stigma_trigger(
         regime="OU_MEAN_REVERSION",
         hurst=0.40,
@@ -192,7 +193,7 @@ def test_cost_to_sl_protection():
         open_=[100.0, 100.0, 100.0],
         close=[100.5, 100.5, 101.0],
         macro_bias=0,
-        cost_price=0.05,  # High cost: 3.5 * 0.05 = 0.175 > 0.16 risk!
+        cost_price=0.05,  # High cost: 3.5 * 0.05 = 0.175 > 0.14 risk!
         return_reason=True,
     )
     assert sig is None
@@ -200,7 +201,7 @@ def test_cost_to_sl_protection():
 
 def test_net_rr_gate_relocates_close_tp1():
     """When Kalman level is closer than 1.1 R, TP1 is moved forward to at least 1.15 R."""
-    # ATR = 1.0 -> risk = 1.6 * 1.0 = 1.6. Kalman level is only 101.5 (0.5 above entry 101.0 -> 0.31 R)
+    # ATR = 1.0 -> risk = 1.4 * 1.0 = 1.4. Kalman level is only 101.5 (0.5 above entry 101.0 -> 0.35 R)
     sig = evaluate_stigma_trigger(
         regime="OU_MEAN_REVERSION",
         hurst=0.40,
@@ -217,8 +218,8 @@ def test_net_rr_gate_relocates_close_tp1():
         cost_price=0.01,
     )
     assert sig is not None
-    # TP1 must have been pushed forward to >= entry + 1.15 * risk = 101.0 + 1.15 * 1.6 = 102.84
-    assert sig["tp1"] >= 101.0 + 1.15 * 1.6
+    # TP1 must have been pushed forward to >= entry + 1.15 * risk = 101.0 + 1.15 * 1.4 = 102.61
+    assert sig["tp1"] >= 101.0 + 1.15 * 1.4
     assert sig["rr_tp1"] >= 1.10
 
 def test_net_rr_gate_rejects_low_rr():
@@ -437,4 +438,149 @@ def test_h1_timeframe_adapters():
     assert "H1" in INTERVALS
     assert INTERVALS["H1"] == "1h"
     assert "H1" in SUPPORTED_TIMEFRAMES
+
+# =====================================================================
+# 10. FAZ 4: HTF TREND ANCHOR, FLAT SLOPE OU LOCK & EARLY BREAKEVEN
+# =====================================================================
+
+def test_ou_trending_slope_veto():
+    """OU Mean-Reversion is vetoed if Kalman velocity or EMA 200 slope is too steep."""
+    # 1. Kalman velocity > 0.12 * ATR
+    sig_v, reason_v = evaluate_stigma_trigger(
+        regime="OU_MEAN_REVERSION",
+        hurst=0.40,
+        variance_ratio=0.85,
+        half_life=10.0,
+        z_score=[-2.5, -2.3, -2.0],
+        level=[100.0, 100.0, 100.0],
+        velocity=[0.2, 0.2, 0.2],  # 0.2 > 0.12 * 1.0 ATR
+        innovation_std=[1.0, 1.0, 1.0],
+        atr=[1.0, 1.0, 1.0],
+        open_=[100.0, 100.0, 100.0],
+        close=[100.2, 100.3, 100.5],
+        return_reason=True,
+    )
+    assert sig_v is None
+    assert reason_v == "TRENDING_SLOPE_VETO"
+
+    # 2. EMA 200 20-bar slope > 2.5 * ATR
+    ema = np.linspace(90.0, 95.0, 25)  # delta = 5.0 > 2.5 * 1.0 ATR
+    sig_e, reason_e = evaluate_stigma_trigger(
+        regime="OU_MEAN_REVERSION",
+        hurst=0.40,
+        variance_ratio=0.85,
+        half_life=10.0,
+        z_score=[-2.5, -2.3, -2.0],
+        level=[100.0, 100.0, 100.0],
+        velocity=[0.05, 0.05, 0.05],  # 0.05 <= 0.12 * ATR
+        innovation_std=[1.0, 1.0, 1.0],
+        atr=[1.0, 1.0, 1.0],
+        open_=[100.0, 100.0, 100.0],
+        close=[100.2, 100.3, 100.5],
+        ema_200=ema,
+        return_reason=True,
+    )
+    assert sig_e is None
+    assert reason_e == "TRENDING_SLOPE_VETO"
+
+def test_ou_extreme_zk_and_candle_geometry():
+    """OU Mean-Reversion requires extreme Z_K (|z| >= 2.20), turn confirmation, and proper candle geometry."""
+    # 1. Z_K not extreme enough (min is -2.10 < 2.20 threshold)
+    sig_not_ext, reason_not_ext = evaluate_stigma_trigger(
+        regime="OU_MEAN_REVERSION",
+        hurst=0.40,
+        variance_ratio=0.85,
+        half_life=10.0,
+        z_score=[-2.10, -2.08, -2.01],
+        level=[100.0, 100.0, 100.0],
+        velocity=[0.0, 0.0, 0.0],
+        innovation_std=[1.0, 1.0, 1.0],
+        atr=[1.0, 1.0, 1.0],
+        open_=[100.0, 100.0, 100.0],
+        close=[100.2, 100.3, 100.5],
+        high_=[100.4, 100.4, 100.6],
+        low_=[99.9, 99.9, 99.9],
+        return_reason=True,
+    )
+    assert sig_not_ext is None
+    assert reason_not_ext == "SETUP_NOT_TRIGGERED"
+
+    # 2. Extreme Z_K, turn confirmed, bullish candle, upper 40% close -> SUCCESS
+    sig_ok, reason_ok = evaluate_stigma_trigger(
+        regime="OU_MEAN_REVERSION",
+        hurst=0.40,
+        variance_ratio=0.85,
+        half_life=10.0,
+        z_score=[-2.50, -2.30, -2.02],
+        level=[100.0, 100.0, 100.0],
+        velocity=[0.0, 0.0, 0.0],
+        innovation_std=[1.0, 1.0, 1.0],
+        atr=[1.0, 1.0, 1.0],
+        open_=[98.0, 98.0, 98.0],
+        close=[98.1, 98.2, 98.8],
+        high_=[98.2, 98.3, 98.9],
+        low_=[97.8, 97.8, 97.9],
+        return_reason=True,
+    )
+    assert sig_ok is not None
+    assert reason_ok == "SUCCESS"
+    assert sig_ok["side"] == "LONG"
+    assert sig_ok["risk"] == pytest.approx(1.4 * 1.0)
+    assert sig_ok["tp1"] == pytest.approx(98.8 + 1.15 * 1.4)
+    assert sig_ok["tp2"] == pytest.approx(98.8 + 2.0 * 1.4)
+
+def test_kalman_momentum_htf_trend_anchor():
+    """Kalman Momentum requires price and 200 EMA to be aligned in trend direction."""
+    ema_bullish = np.linspace(95.0, 98.0, 25)  # e_now = 98.0 > e_prev20 = 95.5
+    ema_bearish = np.linspace(105.0, 102.0, 25)  # e_now = 102.0 < e_prev20 = 104.5
+
+    # 1. Bullish momentum setup with close (100.8) > ema (98.0) and ema rising -> SUCCESS
+    sig_long, reason_long = evaluate_stigma_trigger(
+        regime="KALMAN_MOMENTUM",
+        hurst=0.60,
+        variance_ratio=1.15,
+        half_life=10.0,
+        z_score=[0.1, -0.2, 0.1],
+        level=[99.5, 99.7, 100.0],
+        velocity=[0.1, 0.15, 0.2],
+        innovation_std=[0.5, 0.5, 0.5],
+        atr=[0.5, 0.5, 0.5],
+        open_=[99.8, 99.8, 99.9],
+        close=[100.1, 100.2, 100.8],
+        high_=[100.3, 100.4, 101.0],
+        low_=[99.5, 99.6, 99.8],
+        sigma_yz=0.012,
+        sigma_yz_median=0.008,
+        ema_200=ema_bullish,
+        return_reason=True,
+    )
+    assert sig_long is not None
+    assert reason_long == "SUCCESS"
+    assert sig_long["risk"] == pytest.approx(1.6 * 0.5)
+    assert sig_long["tp1"] == pytest.approx(100.8 + 1.3 * (1.6 * 0.5))
+    assert sig_long["tp2"] == pytest.approx(100.8 + 2.5 * (1.6 * 0.5))
+
+    # 2. Bullish momentum setup but EMA is falling (bearish HTF) -> HTF_TREND_MISALIGNED
+    sig_veto, reason_veto = evaluate_stigma_trigger(
+        regime="KALMAN_MOMENTUM",
+        hurst=0.60,
+        variance_ratio=1.15,
+        half_life=10.0,
+        z_score=[0.1, -0.2, 0.1],
+        level=[99.5, 99.7, 100.0],
+        velocity=[0.1, 0.15, 0.2],
+        innovation_std=[0.5, 0.5, 0.5],
+        atr=[0.5, 0.5, 0.5],
+        open_=[99.8, 99.8, 99.9],
+        close=[100.1, 100.2, 100.8],
+        high_=[100.3, 100.4, 101.0],
+        low_=[99.5, 99.6, 99.8],
+        sigma_yz=0.012,
+        sigma_yz_median=0.008,
+        ema_200=ema_bearish,
+        return_reason=True,
+    )
+    assert sig_veto is None
+    assert reason_veto == "HTF_TREND_MISALIGNED"
+
 

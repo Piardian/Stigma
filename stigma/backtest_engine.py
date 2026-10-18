@@ -63,6 +63,7 @@ def prepare_features(df: pd.DataFrame, *, adaptive_kalman: bool = True) -> pd.Da
     out["innovation_std"] = k.innovation_std
     out["z_k"] = k.z_score
     out["rolling_spread_std"] = pd.Series(c - k.level).rolling(60, min_periods=20).std()
+    out["ema_200"] = out["close"].ewm(span=200, adjust=False).mean()
 
     return out
 
@@ -170,6 +171,7 @@ def backtest(
     atrs = f.atr14.to_numpy()
     sigmas_yz = f.sigma_yz.to_numpy()
     sigmas_yz_med = f.sigma_yz_median50.to_numpy()
+    ema_200s = f.ema_200.to_numpy()
     times = f.index
 
     total_cost = spread + commission + slippage
@@ -189,6 +191,29 @@ def backtest(
         if position is not None:
             position["bars"] += 1
             side = position["side"]
+
+            # Early Breakeven (+0.9 R) and Kalman line trailing for Momentum
+            if position.get("regime") == "KALMAN_MOMENTUM":
+                init_r = position["initial_risk"]
+                if side == "LONG":
+                    if not position.get("breakeven_triggered", False):
+                        if nxt_high >= position["entry"] + 0.9 * init_r:
+                            position["breakeven_triggered"] = True
+                            position["stop_loss"] = max(position["stop_loss"], position["entry"])
+                    if position.get("breakeven_triggered", False):
+                        kalman_trail = levels[i] - 0.5 * atrs[i]
+                        if kalman_trail > position["stop_loss"]:
+                            position["stop_loss"] = kalman_trail
+                else:  # SHORT
+                    if not position.get("breakeven_triggered", False):
+                        if nxt_low <= position["entry"] - 0.9 * init_r:
+                            position["breakeven_triggered"] = True
+                            position["stop_loss"] = min(position["stop_loss"], position["entry"])
+                    if position.get("breakeven_triggered", False):
+                        kalman_trail = levels[i] + 0.5 * atrs[i]
+                        if kalman_trail < position["stop_loss"]:
+                            position["stop_loss"] = kalman_trail
+
             stop = float(position["stop_loss"])
             tp1 = float(position["tp1"])
             tp2 = float(position["tp2"])
@@ -378,6 +403,9 @@ def backtest(
         else:
             continue
 
+        # Dynamic or static macro bias
+        eff_macro = (1 if closes[i] > ema_200s[i] else -1) if (str(macro_bias).lower() == "dynamic" or macro_bias == 999) else int(macro_bias)
+
         # Evaluate trigger conditions with reason reporting
         sig, reason = evaluate_stigma_trigger(
             regime=regime.label,
@@ -393,7 +421,8 @@ def backtest(
             close=closes[:i + 1],
             high_=highs[:i + 1],
             low_=lows[:i + 1],
-            macro_bias=macro_bias,
+            ema_200=ema_200s[:i + 1],
+            macro_bias=eff_macro,
             cost_price=total_cost,
             sigma_yz=sigmas_yz[i],
             sigma_yz_median=sigmas_yz_med[i],
@@ -401,7 +430,17 @@ def backtest(
             return_reason=True,
         )
 
-        if reason in ("SETUP_NOT_TRIGGERED", "INSUFFICIENT_VELOCITY", "MACRO_VETO_LONG", "MACRO_VETO_SHORT"):
+        if reason in (
+            "SETUP_NOT_TRIGGERED",
+            "INSUFFICIENT_VELOCITY",
+            "MACRO_VETO_LONG",
+            "MACRO_VETO_SHORT",
+            "STRATEGY_MODE_VETO",
+            "TRENDING_SLOPE_VETO",
+            "HTF_TREND_MISALIGNED",
+            "OU_HALFLIFE_OUT_OF_BOUNDS",
+            "YZ_VOL_NOT_EXPANDING",
+        ):
             continue
 
         funnel["passed_zscore_setup"] += 1

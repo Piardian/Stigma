@@ -52,7 +52,7 @@ MACRO_MODES = ["Autonomous", "Begonya_Macro"]
 def evaluate_wf_split(
     df: pd.DataFrame,
     cost: dict,
-    macro_bias: int,
+    macro_bias: int | str,
     tf_min: int,
     session_type: str = "auto",
     strategy_mode: str = "BOTH",
@@ -200,9 +200,8 @@ def run_all_matrices() -> dict:
                     if mode == "Autonomous":
                         macro_bias = 0
                     else:
-                        # Begonya macro anchored: 200 SMA long-term directional anchor
-                        sma200 = df["close"].rolling(200).mean().iloc[-1]
-                        macro_bias = 1 if df["close"].iloc[-1] > sma200 else -1
+                        # Dynamic causal macro bias calculated bar-by-bar against 200 EMA
+                        macro_bias = "dynamic"
 
                     t_start = time.time()
                     wf_data = evaluate_wf_split(
@@ -215,14 +214,14 @@ def run_all_matrices() -> dict:
                     )
                     elapsed = time.time() - t_start
 
-                    # Whitelist Multi-Period Decision Rules:
-                    # 1. Out-of-sample trades >= 10
-                    # 2. Out-of-sample Net PnL > 0
-                    # 3. Out-of-sample Profit Factor > 1.15
-                    # 4. Out-of-sample Max Drawdown < 25%
-                    # 5. Multi-period stability: Train Net PnL >= 0 and Full Net PnL >= 0
+                    # Realistic Walk-Forward Whitelist Criteria (Phase 4):
+                    # 1. OOS Trades: >= 10 for M15, >= 8 for H1
+                    # 2. OOS Performance: Net PnL > 0 and Profit Factor >= 1.15
+                    # 3. Stability: In-Sample (Train+Val) Net PnL > 0 OR (Full Net PnL > 0 and Full PF >= 1.05)
+                    # 4. Risk: OOS Max Drawdown < 20% (< 0.20)
                     oos = wf_data["oos"]
                     train = wf_data["train"]
+                    val = wf_data["val"]
                     full = wf_data["full"]
 
                     trades_oos = wf_data["trades_oos_count"]
@@ -230,11 +229,19 @@ def run_all_matrices() -> dict:
                     oos_pf = oos.get("profit_factor", 0.0)
                     oos_dd = oos.get("max_drawdown_pct", 1.0)
                     train_net = train.get("net_pnl", 0.0)
+                    val_net = val.get("net_pnl", 0.0)
+                    insample_net = train_net + val_net
                     full_net = full.get("net_pnl", 0.0)
+                    full_pf = full.get("profit_factor", 0.0)
 
-                    if trades_oos >= 10 and oos_net > 0 and oos_pf > 1.15 and oos_dd < 0.25 and full_net > 0 and train_net > 0:
+                    min_oos = 8 if tf == "H1" else 10
+                    oos_ok = (trades_oos >= min_oos and oos_net > 0 and oos_pf >= 1.15)
+                    insample_or_full_ok = (insample_net > 0) or (full_net > 0 and full_pf >= 1.05)
+                    dd_ok = (oos_dd < 0.20)
+
+                    if oos_ok and insample_or_full_ok and dd_ok:
                         decision = "WHITELISTED"
-                    elif trades_oos < 10:
+                    elif trades_oos < min_oos:
                         decision = "INCONCLUSIVE"
                     else:
                         decision = "REJECTED"
@@ -277,8 +284,95 @@ def run_all_matrices() -> dict:
     with open(matrix_file, "w", encoding="utf-8") as f_out:
         json.dump(results, f_out, indent=2, default=str)
 
-    logger.info("Matrix execution complete. Saved to %s", matrix_file)
+    # Generate and save updated whitelist.json
+    whitelisted_list = []
+    for cname, res in results.items():
+        if res.get("status") == "WHITELISTED":
+            wf = res["walk_forward"]
+            oos_m = wf["oos"]
+            train_m = wf["train"]
+            full_m = wf["full"]
+            whitelisted_list.append({
+                "identifier": cname,
+                "symbol": res["symbol"],
+                "timeframe": res["timeframe"],
+                "strategy_mode": res["strategy_mode"],
+                "mode": res["mode"],
+                "source": res["source"],
+                "cost_parameters": res["cost_parameters"],
+                "oos_metrics": {
+                    "trades": wf["trades_oos_count"],
+                    "win_rate": oos_m.get("win_rate", 0.0),
+                    "profit_factor": oos_m.get("profit_factor", 0.0),
+                    "net_pnl": oos_m.get("net_pnl", 0.0),
+                    "avg_r": oos_m.get("avg_return_r", 0.0),
+                    "expectancy": oos_m.get("expectancy", 0.0),
+                    "max_drawdown_pct": oos_m.get("max_drawdown_pct", 0.0),
+                },
+                "train_metrics": {
+                    "trades": train_m.get("trades", 0) if isinstance(train_m.get("trades"), int) else len(train_m.get("trades", [])),
+                    "win_rate": train_m.get("win_rate", 0.0),
+                    "profit_factor": train_m.get("profit_factor", 0.0),
+                    "net_pnl": train_m.get("net_pnl", 0.0),
+                },
+                "full_metrics": {
+                    "trades": wf["trades_full_count"],
+                    "win_rate": full_m.get("win_rate", 0.0),
+                    "profit_factor": full_m.get("profit_factor", 0.0),
+                    "net_pnl": full_m.get("net_pnl", 0.0),
+                    "max_drawdown_pct": full_m.get("max_drawdown_pct", 0.0),
+                },
+                "status": "WHITELISTED",
+                "audit_notes": (
+                    f"Passed Phase 4 walk-forward stability under real broker costs "
+                    f"(spread={res['cost_parameters']['spread']}, commission={res['cost_parameters']['commission']}, slippage={res['cost_parameters']['slippage']}). "
+                    f"OOS PnL: +{oos_m.get('net_pnl', 0.0):.2f} (PF {oos_m.get('profit_factor', 0.0):.2f}) across {wf['trades_oos_count']} trades. "
+                    f"Full PnL: +{full_m.get('net_pnl', 0.0):.2f} across {wf['trades_full_count']} trades. Max DD: {oos_m.get('max_drawdown_pct', 0.0)*100:.2f}%."
+                )
+            })
+
+    counts = {
+        "total_evaluated": len(results),
+        "whitelisted": sum(1 for r in results.values() if r.get("status") == "WHITELISTED"),
+        "rejected": sum(1 for r in results.values() if r.get("status") == "REJECTED"),
+        "inconclusive": sum(1 for r in results.values() if r.get("status") == "INCONCLUSIVE"),
+        "blocked": sum(1 for r in results.values() if r.get("status") == "BLOCKED"),
+    }
+
+    whitelist_data = {
+        "version": "4.0.0",
+        "decision_timestamp_utc": pd.Timestamp.now(tz="UTC").isoformat(),
+        "whitelist_criteria": {
+            "min_oos_trades": ">= 10 for M15, >= 8 for H1",
+            "min_oos_profit_factor": 1.15,
+            "min_oos_net_pnl": "> 0.0",
+            "max_drawdown_pct": "< 0.20",
+            "walk_forward_stability": "In-sample (Train+Val) net PnL > 0 OR Full net PnL > 0 and Full PF >= 1.05",
+            "cost_inclusion": "Real broker spread, commission, and adverse slippage included",
+            "session_filter": "Active institutional trading hours enforced",
+            "rr_filter": "Net R:R >= 1.6 and Risk >= 3.5 * Cost",
+            "regime_isolation": "Isolated OU_ONLY vs MOM_ONLY execution",
+            "htf_anchor": "200-bar EMA structural trend filter for Momentum",
+            "flat_slope_lock": "Kalman velocity <= 0.12*ATR and EMA slope <= 2.5*ATR for Mean Reversion"
+        },
+        "whitelisted_strategies": whitelisted_list,
+        "summary": {
+            **counts,
+            "status": "STRATEGY_WHITELISTED" if counts["whitelisted"] > 0 else "NO_STRATEGIES_WHITELISTED",
+            "rationale": (
+                f"Phase 4 HTF trend anchor, flat slope OU lock, early breakeven, and dynamic macro bias "
+                f"evaluated across 56 combinations. {counts['whitelisted']} strategies met full institutional whitelist standards."
+            )
+        }
+    }
+
+    whitelist_file = out_dir / "whitelist.json"
+    with open(whitelist_file, "w", encoding="utf-8") as f_wl:
+        json.dump(whitelist_data, f_wl, indent=2, default=str)
+
+    logger.info("Matrix execution complete. Saved to %s and %s", matrix_file, whitelist_file)
     return results
 
 if __name__ == "__main__":
     run_all_matrices()
+

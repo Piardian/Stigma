@@ -1,24 +1,24 @@
-# Stigma Quant Engine — Automated Test Suite Results (Phase 3)
+# Stigma Quant Engine — Automated Test Suite Results (Phase 4)
 
 ## 1. Test Execution Summary
 
-* **Date:** 2026-10-18
+* **Date:** 2026-10-19
 * **Test Runner:** `pytest 9.1.1` (Python 3.12.10, 64-bit Windows)
 * **Configuration:** `pyproject.toml` (with causal testpaths and `pythonpath = ["."]`)
-* **Total Tests Executed:** 25
-* **Passed:** 25
+* **Total Tests Executed:** 28
+* **Passed:** 28
 * **Failed:** 0
 * **Errors:** 0
-* **Execution Time:** ~1.19 seconds
+* **Execution Time:** ~0.90 seconds
 
 ```powershell
 python -m pytest tests/test_stigma_quant.py -v
-# Result: 25 passed in 1.19s (100% pass rate)
+# Result: 28 passed in 0.90s (100% pass rate)
 ```
 
 ---
 
-## 2. Phase 3 Test Catalog and Verification Details
+## 2. Phase 4 Test Catalog and Verification Details
 
 | # | Test Identifier | Module / Feature | Mathematical & Behavioral Invariants Verified | Result |
 |---|-----------------|------------------|-----------------------------------------------|--------|
@@ -34,7 +34,7 @@ python -m pytest tests/test_stigma_quant.py -v
 | 10 | `test_yang_zhang_rejects_negative_or_corrupt_prices` | Yang–Zhang | Raises `ValueError` for negative prices or invalid bar geometry | PASSED |
 | 11 | `test_ou_half_life_known_ar1` | Ornstein–Uhlenbeck | AR(1) series matches theoretical half-life value | PASSED |
 | 12 | `test_ou_half_life_extended_bounds` | Ornstein–Uhlenbeck | Calibrated to 120-bar window and bounds valid mean-reversion within $[2.0, 40.0]$ bars | PASSED |
-| 13 | `test_dynamic_time_stop_clipping` | Time-Stop | Validates $\text{int}(\text{clip}(2.5 \times T_{1/2}, 6, 40))$ | PASSED |
+| 13 | `test_dynamic_time_stop_clipping` | Time-Stop | Validates $\text{int}(\text{clip}(2.0 \times T_{1/2}, 6, 24))$ | PASSED |
 | 14 | `test_cost_to_sl_protection` | Cost Defense | Vetoes entries with `"HIGH_COST_TO_SL"` when $\text{risk} < 3.5 \times \text{cost\_price}$ | PASSED |
 | 15 | `test_net_rr_gate_relocates_close_tp1` | Net R:R Gate | Relocates $\text{TP1} \ge 1.15 R$ when raw Kalman level is too close ($< 1.1 R$) | PASSED |
 | 16 | `test_net_rr_gate_rejects_low_rr` | Net R:R Gate | Vetoes entries with `"LOW_RR"` when net $\text{TP2} < 1.6 R$ | PASSED |
@@ -47,9 +47,12 @@ python -m pytest tests/test_stigma_quant.py -v
 | 23 | `test_kalman_momentum_breakout_and_pullback` | Momentum Trigger | Enforces pullback $-1.0 \le Z_K \le 0.25$ and candle breakout $C > H_{i-1}$ | PASSED |
 | 24 | `test_backtest_by_regime_breakdown` | Regime Isolation | Asserts `by_regime` metrics exist for both `OU_MEAN_REVERSION` and `KALMAN_MOMENTUM` | PASSED |
 | 25 | `test_h1_timeframe_adapters` | Timeframe Adapters | Confirms `H1` is supported in both MT5 and Binance without errors | PASSED |
+| 26 | `test_ou_trending_slope_veto` | Flat Slope Lock | Vetoes Mean Reversion if Kalman velocity $|v| > 0.12 \times \text{ATR}$ or $|\Delta\text{EMA}_{200}| > 2.5 \times \text{ATR}$ | PASSED |
+| 27 | `test_ou_extreme_zk_and_candle_geometry` | OU Geometry | Enforces extreme $|Z_K| \ge 2.20$, reversal turn, and upper 40% close | PASSED |
+| 28 | `test_kalman_momentum_htf_trend_anchor` | HTF Trend Anchor | Enforces 200 EMA alignment ($C > \text{EMA}_{200}$ and $\text{EMA}_{200}$ rising) for Long momentum | PASSED |
 
 ---
 
 ## 3. Conclusion
 
-All 25 unit tests pass deterministically in 1.19s with zero failures. All Phase 3 mathematical calibrations, empirical Z-score formulations, regime isolation filters, and higher-timeframe adapters are 100% verified.
+All 28 unit tests pass deterministically in 0.90s with zero failures. All Phase 4 mathematical calibrations, HTF trend anchor, flat slope OU locks, dynamic trailing stop, and timeframe adapters are 100% verified.

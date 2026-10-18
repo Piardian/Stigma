@@ -334,10 +334,10 @@ def estimate_ou_half_life(
     }
 
 def dynamic_time_stop(half_life: float) -> int:
-    """Dynamic bar time-stop: int(clip(2.5 * half_life, 6, 40))."""
+    """Dynamic bar time-stop: int(clip(2.0 * half_life, 6, 24))."""
     if not np.isfinite(half_life) or half_life <= 0:
         return 6
-    return int(np.clip(2.5 * half_life, 6, 40))
+    return int(np.clip(2.0 * half_life, 6, 24))
 
 def evaluate_stigma_trigger(
     *,
@@ -353,6 +353,7 @@ def evaluate_stigma_trigger(
     close,
     high_=None,
     low_=None,
+    ema_200=None,
     variance_ratio: float = float("nan"),
     macro_bias: int = 0,
     cost_price: float = 0.0,
@@ -378,6 +379,7 @@ def evaluate_stigma_trigger(
 
     h = np.asarray(high_, dtype=float) if high_ is not None else None
     l = np.asarray(low_, dtype=float) if low_ is not None else None
+    e = np.asarray(ema_200, dtype=float) if ema_200 is not None else None
 
     if n < 3 or any(len(q) != n for q in arrays):
         return fail("INSUFFICIENT_BARS")
@@ -388,62 +390,67 @@ def evaluate_stigma_trigger(
     if macro_bias not in (-1, 0, 1):
         return fail("INVALID_MACRO_BIAS")
 
+    # EMA 200 values for HTF anchor and flat slope checks
+    if e is not None and len(e) >= 3 and np.isfinite(e[-1]):
+        e_now = float(e[-1])
+        e_prev20 = float(e[-20]) if (len(e) >= 20 and np.isfinite(e[-20])) else float(e[0])
+    else:
+        e_now = float(c[-1])
+        e_prev20 = float(c[-1])
+
     entry = float(c[-1])
-    risk = 1.6 * float(a[-1])
-
-    # Minimum SL / Spread protection (cost must not exceed 28.5% of stop distance: risk >= 3.5 * cost)
-    if cost_price > 0 and risk < 3.5 * cost_price:
-        return fail("HIGH_COST_TO_SL")
-
     side = None
     stop = tp1 = tp2 = None
     hold = 24
+    risk = 1.6 * float(a[-1])
 
     # 1. OU Mean-Reversion Regime
     if regime == "OU_MEAN_REVERSION":
+        # Flat Slope Check: Kalman velocity <= 0.12 * ATR and 200 EMA slope <= 2.5 * ATR
+        if abs(v[-1]) > 0.12 * a[-1] or abs(e_now - e_prev20) > 2.5 * a[-1]:
+            return fail("TRENDING_SLOPE_VETO")
+
         if not (2.0 <= half_life <= 40.0):
             return fail("OU_HALFLIFE_OUT_OF_BOUNDS")
 
+        risk = 1.4 * float(a[-1])
+        if cost_price > 0 and risk < 3.5 * cost_price:
+            return fail("HIGH_COST_TO_SL")
+
         hold = dynamic_time_stop(half_life)
 
-        # Long Mean-Reversion setup
-        if np.min(z[-3:]) <= -2.0 and z[-1] > z[-2] and z[-1] >= -1.85 and c[-1] > o[-1]:
+        # Candle geometry calculations:
+        bar_rng = (h[-1] - l[-1]) if (h is not None and l is not None and len(h) == n) else 0.0
+        upper_40_long = ((c[-1] - l[-1]) >= 0.60 * bar_rng) if bar_rng > 1e-12 else True
+        lower_40_short = ((h[-1] - c[-1]) >= 0.60 * bar_rng) if bar_rng > 1e-12 else True
+
+        # Long Mean-Reversion setup:
+        # min(Z_K) in last 3 bars <= -2.20, turn confirmation (z[-1] > z[-2] and z[-1] >= -2.05),
+        # bullish candle (c > o), and close in upper 40% of candle range: (c - l) >= 0.60 * (h - l)
+        if np.min(z[-3:]) <= -2.20 and z[-1] > z[-2] and z[-1] >= -2.05 and c[-1] > o[-1] and upper_40_long:
             if macro_bias < 0:
                 return fail("MACRO_VETO_LONG")
             side = "LONG"
             stop = entry - risk
             eff_entry = entry + 0.5 * cost_price
+            tp1 = entry + 1.15 * risk
+            tp2 = entry + 2.0 * risk
 
-            # Target 1: Kalman level; if closer than 1.1 R to effective entry, push forward to minimum 1.15 R
-            tp1_raw = float(x[-1])
-            if (tp1_raw - eff_entry) < 1.1 * risk:
-                tp1 = max(float(x[-1] + 0.5 * s[-1]), entry + 1.15 * risk)
-            else:
-                tp1 = tp1_raw
-
-            # Target 2: Mean-reversion extension
-            tp2 = max(float(x[-1] + 1.2 * s[-1]), entry + 2.0 * risk)
-
-            # Net R:R verification for TP2
             rr_tp2 = (tp2 - eff_entry) / risk
             if rr_tp2 < 1.6:
                 return fail("LOW_RR")
 
-        # Short Mean-Reversion setup
-        elif np.max(z[-3:]) >= 2.0 and z[-1] < z[-2] and z[-1] <= 1.85 and c[-1] < o[-1]:
+        # Short Mean-Reversion setup:
+        # max(Z_K) in last 3 bars >= 2.20, turn confirmation (z[-1] < z[-2] and z[-1] <= 2.05),
+        # bearish candle (c < o), and close in lower 40% of candle range: (h - c) >= 0.60 * (h - l)
+        elif np.max(z[-3:]) >= 2.20 and z[-1] < z[-2] and z[-1] <= 2.05 and c[-1] < o[-1] and lower_40_short:
             if macro_bias > 0:
                 return fail("MACRO_VETO_SHORT")
             side = "SHORT"
             stop = entry + risk
             eff_entry = entry - 0.5 * cost_price
-
-            tp1_raw = float(x[-1])
-            if (eff_entry - tp1_raw) < 1.1 * risk:
-                tp1 = min(float(x[-1] - 0.5 * s[-1]), entry - 1.15 * risk)
-            else:
-                tp1 = tp1_raw
-
-            tp2 = min(float(x[-1] - 1.2 * s[-1]), entry - 2.0 * risk)
+            tp1 = entry - 1.15 * risk
+            tp2 = entry - 2.0 * risk
 
             rr_tp2 = (eff_entry - tp2) / risk
             if rr_tp2 < 1.6:
@@ -451,6 +458,10 @@ def evaluate_stigma_trigger(
 
     # 2. Kalman Momentum Regime
     elif regime == "KALMAN_MOMENTUM":
+        risk = 1.6 * float(a[-1])
+        if cost_price > 0 and risk < 3.5 * cost_price:
+            return fail("HIGH_COST_TO_SL")
+
         # Check Yang-Zhang volatility expansion
         if np.isfinite(sigma_yz) and np.isfinite(sigma_yz_median) and sigma_yz <= sigma_yz_median:
             return fail("YZ_VOL_NOT_EXPANDING")
@@ -458,47 +469,47 @@ def evaluate_stigma_trigger(
         if abs(v[-1]) <= 0.05 * a[-1]:
             return fail("INSUFFICIENT_VELOCITY")
 
-        hold = 24
+        # HTF structural trend anchor (enforced when ema_200 is provided):
+        if e is not None and len(e) >= 3 and np.isfinite(e[-1]):
+            htf_bullish = (c[-1] > e_now and e_now > e_prev20)
+            htf_bearish = (c[-1] < e_now and e_now < e_prev20)
+        else:
+            htf_bullish = True
+            htf_bearish = True
 
-        # Long Momentum:
-        # 1. Kalman slope positive (v[-1] > 0)
-        # 2. Kalman level trend positive (x[-1] > x[-10])
-        # 3. Pullback to Kalman line (-1.0 <= Z_K <= +0.25)
-        # 4. Strong breakout candle (c[-1] > o[-1] and c[-1] > high[i-1])
         pullback_long = (-1.0 <= z[-1] <= 0.25) or (-1.0 <= np.min(z[-3:]) <= 0.2 and z[-1] <= 0.8)
         trend_long = (x[-1] > x[-10]) if n >= 10 else (x[-1] > x[0])
         breakout_long = (c[-1] > o[-1]) and (c[-1] > h[-2] if (h is not None and len(h) >= 2) else True)
 
         if v[-1] > 0 and trend_long and pullback_long and breakout_long:
+            if not htf_bullish:
+                return fail("HTF_TREND_MISALIGNED")
             if macro_bias < 0:
                 return fail("MACRO_VETO_LONG")
             side = "LONG"
             stop = entry - risk
             eff_entry = entry + 0.5 * cost_price
-            tp1 = entry + 1.5 * risk
-            tp2 = entry + 2.8 * risk
+            tp1 = entry + 1.3 * risk
+            tp2 = entry + 2.5 * risk
 
             rr_tp2 = (tp2 - eff_entry) / risk
             if rr_tp2 < 1.6:
                 return fail("LOW_RR")
 
-        # Short Momentum:
-        # 1. Kalman slope negative (v[-1] < 0)
-        # 2. Kalman level trend negative (x[-1] < x[-10])
-        # 3. Pullback to Kalman line (-0.25 <= Z_K <= +1.0)
-        # 4. Strong breakdown candle (c[-1] < o[-1] and c[-1] < low[i-1])
         pullback_short = (-0.25 <= z[-1] <= 1.0) or (-0.2 <= np.max(z[-3:]) <= 1.0 and z[-1] >= -0.8)
         trend_short = (x[-1] < x[-10]) if n >= 10 else (x[-1] < x[0])
         breakdown_short = (c[-1] < o[-1]) and (c[-1] < l[-2] if (l is not None and len(l) >= 2) else True)
 
         if v[-1] < 0 and trend_short and pullback_short and breakdown_short:
+            if not htf_bearish:
+                return fail("HTF_TREND_MISALIGNED")
             if macro_bias > 0:
                 return fail("MACRO_VETO_SHORT")
             side = "SHORT"
             stop = entry + risk
             eff_entry = entry - 0.5 * cost_price
-            tp1 = entry - 1.5 * risk
-            tp2 = entry - 2.8 * risk
+            tp1 = entry - 1.3 * risk
+            tp2 = entry - 2.5 * risk
 
             rr_tp2 = (eff_entry - tp2) / risk
             if rr_tp2 < 1.6:
