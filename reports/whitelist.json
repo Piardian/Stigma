@@ -1,0 +1,21 @@
+{
+  "version": "1.0.0",
+  "decision_timestamp_utc": "2026-10-18T14:15:00Z",
+  "whitelist_criteria": {
+    "min_oos_trades": 20,
+    "min_oos_profit_factor": 1.25,
+    "max_drawdown_pct": 0.20,
+    "walk_forward_stability": "Consistent positive expectancy across Train, Validation, and Out-of-Sample",
+    "cost_inclusion": "Real broker spread, commission, and adverse slippage included"
+  },
+  "whitelisted_strategies": [],
+  "summary": {
+    "total_evaluated": 28,
+    "whitelisted": 0,
+    "rejected": 6,
+    "inconclusive": 22,
+    "blocked": 0,
+    "status": "EMPTY_WHITELIST",
+    "rationale": "No candidate combination met the multi-period stability criteria. Candidates with positive OOS periods (e.g. NAS100 M5/M15, EURUSD M15) showed negative Train/Validation expectancy, indicating regime clustering or sample variance rather than true stationary statistical edge under transaction costs."
+  }
+}

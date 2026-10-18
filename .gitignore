@@ -3,5 +3,5 @@ __pycache__/
 .venv/
 .env
 *.py[cod]
-reports/
 data/
+reports/*.csv
