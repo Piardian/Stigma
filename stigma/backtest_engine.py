@@ -192,25 +192,26 @@ def backtest(
             position["bars"] += 1
             side = position["side"]
 
-            # Early Breakeven (+0.9 R) and Kalman line trailing for Momentum
+            # Phase 5: Momentum Trailing Stop & Breakeven Calibration
             if position.get("regime") == "KALMAN_MOMENTUM":
                 init_r = position["initial_risk"]
-                if side == "LONG":
+                # 1. Before TP1: When price reaches +0.9 R, move Stop Loss to entry (Breakeven)
+                if not position.get("tp1_hit", False):
                     if not position.get("breakeven_triggered", False):
-                        if nxt_high >= position["entry"] + 0.9 * init_r:
+                        if side == "LONG" and nxt_high >= position["entry"] + 0.9 * init_r:
                             position["breakeven_triggered"] = True
                             position["stop_loss"] = max(position["stop_loss"], position["entry"])
-                    if position.get("breakeven_triggered", False):
-                        kalman_trail = levels[i] - 0.5 * atrs[i]
-                        if kalman_trail > position["stop_loss"]:
-                            position["stop_loss"] = kalman_trail
-                else:  # SHORT
-                    if not position.get("breakeven_triggered", False):
-                        if nxt_low <= position["entry"] - 0.9 * init_r:
+                        elif side == "SHORT" and nxt_low <= position["entry"] - 0.9 * init_r:
                             position["breakeven_triggered"] = True
                             position["stop_loss"] = min(position["stop_loss"], position["entry"])
-                    if position.get("breakeven_triggered", False):
-                        kalman_trail = levels[i] + 0.5 * atrs[i]
+                else:
+                    # 2. After TP1 is hit: Apply wide Kalman trailing stop (kalman_level ∓ 1.2 * ATR) for the remaining 50%
+                    if side == "LONG":
+                        kalman_trail = levels[i] - 1.2 * atrs[i]
+                        if kalman_trail > position["stop_loss"]:
+                            position["stop_loss"] = kalman_trail
+                    else:
+                        kalman_trail = levels[i] + 1.2 * atrs[i]
                         if kalman_trail < position["stop_loss"]:
                             position["stop_loss"] = kalman_trail
 

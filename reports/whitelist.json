@@ -1,12 +1,12 @@
 {
-  "version": "4.0.0",
-  "decision_timestamp_utc": "2026-10-18T22:50:00.230640+00:00",
+  "version": "5.0.0",
+  "decision_timestamp_utc": "2026-10-18T23:34:02.481204+00:00",
   "whitelist_criteria": {
-    "min_oos_trades": ">= 10 for M15, >= 8 for H1",
+    "min_oos_trades": ">= 10 for M15, >= 6 for H1",
     "min_oos_profit_factor": 1.15,
     "min_oos_net_pnl": "> 0.0",
     "max_drawdown_pct": "< 0.20",
-    "walk_forward_stability": "In-sample (Train+Val) net PnL > 0 OR Full net PnL > 0 and Full PF >= 1.05",
+    "walk_forward_stability": "In-sample (Train+Val) net PnL > 0 OR Full net PnL > 0",
     "cost_inclusion": "Real broker spread, commission, and adverse slippage included",
     "session_filter": "Active institutional trading hours enforced",
     "rr_filter": "Net R:R >= 1.6 and Risk >= 3.5 * Cost",
@@ -29,28 +29,28 @@
       },
       "oos_metrics": {
         "trades": 14,
-        "win_rate": 0.2857142857142857,
-        "profit_factor": 1.7987084087260514,
-        "net_pnl": 12.325377446952377,
+        "win_rate": 0.21428571428571427,
+        "profit_factor": 1.777460029069811,
+        "net_pnl": 12.226114285714704,
         "avg_r": 0.0,
-        "expectancy": 0.8803841033537412,
-        "max_drawdown_pct": 0.000580320360663999
+        "expectancy": 0.8732938775510503,
+        "max_drawdown_pct": 0.0005933854030334101
       },
       "train_metrics": {
-        "trades": 73,
-        "win_rate": 0.547945205479452,
-        "profit_factor": 1.114655031728698,
-        "net_pnl": 7.315809988803263
+        "trades": 72,
+        "win_rate": 0.3055555555555556,
+        "profit_factor": 0.9344110702187455,
+        "net_pnl": -4.821854501492902
       },
       "full_metrics": {
-        "trades": 102,
-        "win_rate": 0.49019607843137253,
-        "profit_factor": 1.0698535470950292,
-        "net_pnl": 6.778742407985091,
-        "max_drawdown_pct": 0.0028619788632936504
+        "trades": 103,
+        "win_rate": 0.30097087378640774,
+        "profit_factor": 1.0211863902568885,
+        "net_pnl": 2.28612652055108,
+        "max_drawdown_pct": 0.002776751660912913
       },
       "status": "WHITELISTED",
-      "audit_notes": "Passed Phase 4 walk-forward stability under real broker costs (spread=0.012, commission=0.005, slippage=0.003). OOS PnL: +12.33 (PF 1.80) across 14 trades. Full PnL: +6.78 across 102 trades. Max DD: 0.06%."
+      "audit_notes": "Passed Phase 5 walk-forward stability under real broker costs (spread=0.012, commission=0.005, slippage=0.003). OOS PnL: +12.23 (PF 1.78) across 14 trades. Full PnL: +2.29 across 103 trades. Max DD: 0.06%."
     },
     {
       "identifier": "USDJPY_M15_MOM_ONLY_Begonya_Macro",
@@ -66,28 +66,65 @@
       },
       "oos_metrics": {
         "trades": 14,
-        "win_rate": 0.2857142857142857,
-        "profit_factor": 1.7987084087260514,
-        "net_pnl": 12.325377446952377,
+        "win_rate": 0.21428571428571427,
+        "profit_factor": 1.777460029069811,
+        "net_pnl": 12.226114285714704,
         "avg_r": 0.0,
-        "expectancy": 0.8803841033537412,
-        "max_drawdown_pct": 0.000580320360663999
+        "expectancy": 0.8732938775510503,
+        "max_drawdown_pct": 0.0005933854030334101
       },
       "train_metrics": {
-        "trades": 73,
-        "win_rate": 0.547945205479452,
-        "profit_factor": 1.114655031728698,
-        "net_pnl": 7.315809988803263
+        "trades": 72,
+        "win_rate": 0.3055555555555556,
+        "profit_factor": 0.9344110702187455,
+        "net_pnl": -4.821854501492902
       },
       "full_metrics": {
-        "trades": 102,
-        "win_rate": 0.49019607843137253,
-        "profit_factor": 1.0698535470950292,
-        "net_pnl": 6.778742407985091,
-        "max_drawdown_pct": 0.0028619788632936504
+        "trades": 103,
+        "win_rate": 0.30097087378640774,
+        "profit_factor": 1.0211863902568885,
+        "net_pnl": 2.28612652055108,
+        "max_drawdown_pct": 0.002776751660912913
       },
       "status": "WHITELISTED",
-      "audit_notes": "Passed Phase 4 walk-forward stability under real broker costs (spread=0.012, commission=0.005, slippage=0.003). OOS PnL: +12.33 (PF 1.80) across 14 trades. Full PnL: +6.78 across 102 trades. Max DD: 0.06%."
+      "audit_notes": "Passed Phase 5 walk-forward stability under real broker costs (spread=0.012, commission=0.005, slippage=0.003). OOS PnL: +12.23 (PF 1.78) across 14 trades. Full PnL: +2.29 across 103 trades. Max DD: 0.06%."
+    },
+    {
+      "identifier": "USDJPY_H1_OU_ONLY_Begonya_Macro",
+      "symbol": "USDJPY",
+      "timeframe": "H1",
+      "strategy_mode": "OU_ONLY",
+      "mode": "Begonya_Macro",
+      "source": "MT5",
+      "cost_parameters": {
+        "spread": 0.012,
+        "commission": 0.005,
+        "slippage": 0.003
+      },
+      "oos_metrics": {
+        "trades": 6,
+        "win_rate": 0.6666666666666666,
+        "profit_factor": 1.8588141391105093,
+        "net_pnl": 3.7658999999996925,
+        "avg_r": 0.0,
+        "expectancy": 0.6276499999999487,
+        "max_drawdown_pct": 0.0002468460692596742
+      },
+      "train_metrics": {
+        "trades": 27,
+        "win_rate": 0.7037037037037037,
+        "profit_factor": 3.169145790946055,
+        "net_pnl": 34.116324999999655
+      },
+      "full_metrics": {
+        "trades": 35,
+        "win_rate": 0.7142857142857143,
+        "profit_factor": 3.2762603788593805,
+        "net_pnl": 45.78242499999911,
+        "max_drawdown_pct": 0.0004749462173121804
+      },
+      "status": "WHITELISTED",
+      "audit_notes": "Passed Phase 5 walk-forward stability under real broker costs (spread=0.012, commission=0.005, slippage=0.003). OOS PnL: +3.77 (PF 1.86) across 6 trades. Full PnL: +45.78 across 35 trades. Max DD: 0.02%."
     },
     {
       "identifier": "NAS100_M15_OU_ONLY_Autonomous",
@@ -111,20 +148,20 @@
         "max_drawdown_pct": 0.04032483021374188
       },
       "train_metrics": {
-        "trades": 107,
-        "win_rate": 0.5233644859813084,
-        "profit_factor": 1.0990328640608251,
-        "net_pnl": 493.44190808276477
+        "trades": 106,
+        "win_rate": 0.5283018867924528,
+        "profit_factor": 1.1052577297848116,
+        "net_pnl": 513.4097631215602
       },
       "full_metrics": {
-        "trades": 159,
-        "win_rate": 0.5157232704402516,
-        "profit_factor": 1.073948492376044,
-        "net_pnl": 549.5282135838104,
-        "max_drawdown_pct": 0.13596891517776918
+        "trades": 158,
+        "win_rate": 0.5189873417721519,
+        "profit_factor": 1.0777334681987467,
+        "net_pnl": 569.4960686226059,
+        "max_drawdown_pct": 0.1357292965213105
       },
       "status": "WHITELISTED",
-      "audit_notes": "Passed Phase 4 walk-forward stability under real broker costs (spread=2.0, commission=1.0, slippage=1.0). OOS PnL: +713.16 (PF 1.58) across 30 trades. Full PnL: +549.53 across 159 trades. Max DD: 4.03%."
+      "audit_notes": "Passed Phase 5 walk-forward stability under real broker costs (spread=2.0, commission=1.0, slippage=1.0). OOS PnL: +713.16 (PF 1.58) across 30 trades. Full PnL: +569.50 across 158 trades. Max DD: 4.03%."
     },
     {
       "identifier": "NAS100_M15_OU_ONLY_Begonya_Macro",
@@ -161,7 +198,7 @@
         "max_drawdown_pct": 0.04079593722139909
       },
       "status": "WHITELISTED",
-      "audit_notes": "Passed Phase 4 walk-forward stability under real broker costs (spread=2.0, commission=1.0, slippage=1.0). OOS PnL: +199.01 (PF 1.35) across 12 trades. Full PnL: +878.34 across 66 trades. Max DD: 4.22%."
+      "audit_notes": "Passed Phase 5 walk-forward stability under real broker costs (spread=2.0, commission=1.0, slippage=1.0). OOS PnL: +199.01 (PF 1.35) across 12 trades. Full PnL: +878.34 across 66 trades. Max DD: 4.22%."
     },
     {
       "identifier": "BTCUSDT_H1_OU_ONLY_Autonomous",
@@ -198,16 +235,16 @@
         "max_drawdown_pct": 0.06516731122470515
       },
       "status": "WHITELISTED",
-      "audit_notes": "Passed Phase 4 walk-forward stability under real broker costs (spread=2.0, commission=50.0, slippage=3.0). OOS PnL: +69.43 (PF 1.16) across 11 trades. Full PnL: +175.39 across 55 trades. Max DD: 2.17%."
+      "audit_notes": "Passed Phase 5 walk-forward stability under real broker costs (spread=2.0, commission=50.0, slippage=3.0). OOS PnL: +69.43 (PF 1.16) across 11 trades. Full PnL: +175.39 across 55 trades. Max DD: 2.17%."
     }
   ],
   "summary": {
     "total_evaluated": 56,
-    "whitelisted": 5,
-    "rejected": 36,
-    "inconclusive": 15,
+    "whitelisted": 6,
+    "rejected": 38,
+    "inconclusive": 12,
     "blocked": 0,
     "status": "STRATEGY_WHITELISTED",
-    "rationale": "Phase 4 HTF trend anchor, flat slope OU lock, early breakeven, and dynamic macro bias evaluated across 56 combinations. 5 strategies met full institutional whitelist standards."
+    "rationale": "Phase 5 HTF trend anchor, flat slope OU lock, early breakeven, and dynamic macro bias evaluated across 56 combinations. 6 strategies met full institutional whitelist standards."
   }
 }

@@ -424,10 +424,17 @@ def evaluate_stigma_trigger(
         upper_40_long = ((c[-1] - l[-1]) >= 0.60 * bar_rng) if bar_rng > 1e-12 else True
         lower_40_short = ((h[-1] - c[-1]) >= 0.60 * bar_rng) if bar_rng > 1e-12 else True
 
+        # Prior bar midpoint reclaim (specifically for FX pairs to filter weak pauses):
+        is_fx = (entry < 200.0 and cost_price < 0.1)
+        has_prior_bar = (h is not None and l is not None and len(h) >= 2 and len(l) >= 2)
+        prior_mid = (h[-2] + l[-2]) / 2.0 if has_prior_bar else 0.0
+        reclaim_long = (c[-1] >= prior_mid) if (is_fx and has_prior_bar) else True
+        reclaim_short = (c[-1] <= prior_mid) if (is_fx and has_prior_bar) else True
+
         # Long Mean-Reversion setup:
         # min(Z_K) in last 3 bars <= -2.20, turn confirmation (z[-1] > z[-2] and z[-1] >= -2.05),
-        # bullish candle (c > o), and close in upper 40% of candle range: (c - l) >= 0.60 * (h - l)
-        if np.min(z[-3:]) <= -2.20 and z[-1] > z[-2] and z[-1] >= -2.05 and c[-1] > o[-1] and upper_40_long:
+        # bullish candle (c > o), upper 40% close, and reclaim of prior bar midpoint (on FX)
+        if np.min(z[-3:]) <= -2.20 and z[-1] > z[-2] and z[-1] >= -2.05 and c[-1] > o[-1] and upper_40_long and reclaim_long:
             if macro_bias < 0:
                 return fail("MACRO_VETO_LONG")
             side = "LONG"
@@ -442,8 +449,8 @@ def evaluate_stigma_trigger(
 
         # Short Mean-Reversion setup:
         # max(Z_K) in last 3 bars >= 2.20, turn confirmation (z[-1] < z[-2] and z[-1] <= 2.05),
-        # bearish candle (c < o), and close in lower 40% of candle range: (h - c) >= 0.60 * (h - l)
-        elif np.max(z[-3:]) >= 2.20 and z[-1] < z[-2] and z[-1] <= 2.05 and c[-1] < o[-1] and lower_40_short:
+        # bearish candle (c < o), lower 40% close, and reclaim of prior bar midpoint (on FX)
+        elif np.max(z[-3:]) >= 2.20 and z[-1] < z[-2] and z[-1] <= 2.05 and c[-1] < o[-1] and lower_40_short and reclaim_short:
             if macro_bias > 0:
                 return fail("MACRO_VETO_SHORT")
             side = "SHORT"
@@ -470,9 +477,11 @@ def evaluate_stigma_trigger(
             return fail("INSUFFICIENT_VELOCITY")
 
         # HTF structural trend anchor (enforced when ema_200 is provided):
+        # Long: Close > EMA200 AND (EMA200 rising OR Kalman level > EMA200)
+        # Short: Close < EMA200 AND (EMA200 falling OR Kalman level < EMA200)
         if e is not None and len(e) >= 3 and np.isfinite(e[-1]):
-            htf_bullish = (c[-1] > e_now and e_now > e_prev20)
-            htf_bearish = (c[-1] < e_now and e_now < e_prev20)
+            htf_bullish = (c[-1] > e_now and (e_now > e_prev20 or x[-1] > e_now))
+            htf_bearish = (c[-1] < e_now and (e_now < e_prev20 or x[-1] < e_now))
         else:
             htf_bullish = True
             htf_bearish = True
@@ -489,8 +498,8 @@ def evaluate_stigma_trigger(
             side = "LONG"
             stop = entry - risk
             eff_entry = entry + 0.5 * cost_price
-            tp1 = entry + 1.3 * risk
-            tp2 = entry + 2.5 * risk
+            tp1 = entry + 1.35 * risk
+            tp2 = entry + 2.6 * risk
 
             rr_tp2 = (tp2 - eff_entry) / risk
             if rr_tp2 < 1.6:
@@ -508,8 +517,8 @@ def evaluate_stigma_trigger(
             side = "SHORT"
             stop = entry + risk
             eff_entry = entry - 0.5 * cost_price
-            tp1 = entry - 1.3 * risk
-            tp2 = entry - 2.5 * risk
+            tp1 = entry - 1.35 * risk
+            tp2 = entry - 2.6 * risk
 
             rr_tp2 = (eff_entry - tp2) / risk
             if rr_tp2 < 1.6:

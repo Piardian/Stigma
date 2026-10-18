@@ -557,10 +557,10 @@ def test_kalman_momentum_htf_trend_anchor():
     assert sig_long is not None
     assert reason_long == "SUCCESS"
     assert sig_long["risk"] == pytest.approx(1.6 * 0.5)
-    assert sig_long["tp1"] == pytest.approx(100.8 + 1.3 * (1.6 * 0.5))
-    assert sig_long["tp2"] == pytest.approx(100.8 + 2.5 * (1.6 * 0.5))
+    assert sig_long["tp1"] == pytest.approx(100.8 + 1.35 * (1.6 * 0.5))
+    assert sig_long["tp2"] == pytest.approx(100.8 + 2.6 * (1.6 * 0.5))
 
-    # 2. Bullish momentum setup but EMA is falling (bearish HTF) -> HTF_TREND_MISALIGNED
+    # 2. Bullish momentum setup but EMA is above price (bearish HTF) -> HTF_TREND_MISALIGNED
     sig_veto, reason_veto = evaluate_stigma_trigger(
         regime="KALMAN_MOMENTUM",
         hurst=0.60,
@@ -582,5 +582,72 @@ def test_kalman_momentum_htf_trend_anchor():
     )
     assert sig_veto is None
     assert reason_veto == "HTF_TREND_MISALIGNED"
+
+# =====================================================================
+# 11. FAZ 5: SIGNAL DEDUPLICATOR & TELEGRAM ALERT ENGINE
+# =====================================================================
+
+def test_signal_deduplicator():
+    """SignalDeduplicator prevents duplicate alerts for identical (symbol, strat, bar_time)."""
+    from stigma.execution_notifier import SignalDeduplicator
+
+    dedup = SignalDeduplicator()
+    # First time: should emit
+    assert dedup.should_emit("NAS100", "OU_ONLY", "2026-10-19 01:15:00") is True
+    # Duplicate bar: should not emit
+    assert dedup.should_emit("NAS100", "OU_ONLY", "2026-10-19 01:15:00") is False
+    assert dedup.is_duplicate("NAS100", "OU_ONLY", "2026-10-19 01:15:00") is True
+
+    # Different time: should emit
+    assert dedup.should_emit("NAS100", "OU_ONLY", "2026-10-19 01:30:00") is True
+    # Different strategy: should emit
+    assert dedup.should_emit("NAS100", "MOM_ONLY", "2026-10-19 01:15:00") is True
+    # Different symbol: should emit
+    assert dedup.should_emit("USDJPY", "OU_ONLY", "2026-10-19 01:15:00") is True
+
+    # Clear resets state
+    dedup.clear()
+    assert dedup.should_emit("NAS100", "OU_ONLY", "2026-10-19 01:15:00") is True
+
+def test_format_telegram_message_and_send_failsafe():
+    """Verifies Telegram alert message contains all quant parameters and fails safe without token."""
+    from stigma.execution_notifier import format_telegram_message, send_telegram_alert
+
+    sample_signal = {
+        "symbol": "BTCUSDT",
+        "timeframe": "H1",
+        "strategy_mode": "OU_MEAN_REVERSION",
+        "side": "LONG",
+        "entry": 65000.0,
+        "stop_loss": 64500.0,
+        "tp1": 65500.0,
+        "tp2": 66200.0,
+        "max_hold_bars": 18,
+        "hurst": 0.412,
+        "variance_ratio": 0.885,
+        "half_life": 9.2,
+        "z_score": -2.35,
+        "bar_time": "2026-10-19 01:00:00",
+    }
+    msg = format_telegram_message(sample_signal)
+    assert "BTCUSDT" in msg
+    assert "OU_MEAN_REVERSION" in msg
+    assert "65000" in msg
+    assert "0.412" in msg
+    assert "-2.35" in msg
+    assert "9.2 bars" in msg
+
+    # Without tokens, send_telegram_alert logs and returns False cleanly without raising
+    sent = send_telegram_alert(sample_signal, bot_token="", chat_id="")
+    assert sent is False
+
+def test_scan_whitelist_missing_file_failsafe():
+    """scan_whitelisted_strategies returns empty list when whitelist file is missing."""
+    from run_pipeline import scan_whitelisted_strategies
+
+    signals, bars = scan_whitelisted_strategies(whitelist_file="non_existent_file.json")
+    assert signals == []
+    assert bars == {}
+
 
 

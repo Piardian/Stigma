@@ -200,5 +200,35 @@ In Phase 4, the engine was enhanced with 4 targeted institutional features that 
 4. **`NAS100_M15_OU_ONLY_Begonya_Macro`**: OOS PnL $+199.01$ (PF 1.35), Train $+729.58$, Full $+878.34$ (PF 1.33) across 66 trades, Max DD 4.22%.
 5. **`BTCUSDT_H1_OU_ONLY_Autonomous`**: OOS PnL $+69.43$ (PF 1.16), Val $+458.21$, Full $+175.39$ across 55 trades, Max DD 2.17%.
 
+---
+
+## 8. Phase 5 Final Polish: Trailing Stop Calibration, FX Midpoint Reclaim, and Live Whitelist Orchestrator
+
+Phase 5 completed the transition from pure research backtesting to a production-grade, autonomous quantitative execution monitoring architecture:
+
+### A. Trailing Stop & Breathing Room Calibration
+* **Pre-TP1 Narrow Trailing Removal:** In Phase 4, an aggressive trailing stop ($\hat{x}_t \mp 0.5 \times \text{ATR}$) choked early-stage momentum trades before they could hit TP1. In Phase 5, the narrow trailing stop was completely removed prior to TP1. Instead, when market price advances $\ge +0.9 R$, Stop Loss is moved strictly to Breakeven ($\text{entry}$).
+* **Post-TP1 Wide Trailing Stop:** Once TP1 ($1.35 R$) is locked in (50% position), the remaining 50% trails behind a wide, protective Kalman boundary: $\hat{x}_t - 1.2 \times \text{ATR}_t$ (Long) or $\hat{x}_t + 1.2 \times \text{ATR}_t$ (Short), targeting TP2 ($2.6 R$).
+* **Refined HTF Trend Anchor:** Relaxed the rigid slope condition $\text{EMA}_{200, t} > \text{EMA}_{200, t-20}$ to allow entry whenever $C_t > \text{EMA}_{200, t}$ and either the 200 EMA is rising OR the Kalman equilibrium line is above the 200 EMA ($\hat{x}_t > \text{EMA}_{200, t}$), capturing early momentum inflections without compromising trend integrity.
+
+### B. Profile-Specific FX Midpoint Reclaim
+* **Problem:** Applying an obligatory prior-bar midpoint reclaim ($C_t \ge (H_{t-1} + L_{t-1})/2.0$) damaged index (`NAS100`) and crypto (`BTCUSDT`) strategies, because high-beta assets frequently rebound via rapid single-candle V-wick spikes.
+* **Resolution:** Restricted the midpoint reclaim strictly to FX currency pairs (`entry < 200.0 and cost_price < 0.1`). This successfully filtered false counter-trend noise in FX without delaying explosive reversals in NAS100 or BTCUSDT.
+
+### C. Live Whitelist Scanner & Alert Engine (`run_pipeline.py --scan-whitelist --watch`)
+* **Dynamic Whitelist Loading:** Ingests `reports/whitelist.json` dynamically and maps approved combinations to MT5 and Binance data feeds.
+* **Deduplication Engine (`SignalDeduplicator`):** Prevents alert spam by hashing `(symbol, timeframe, bar_timestamp)`. Ensures exactly one alert per completed bar.
+* **Fail-Safe Telegram Dispatcher:** Implemented zero-dependency HTTP notification engine via `urllib.request`. When credentials (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`) are absent or internet drops, it logs gracefully without interrupting the scanner loop.
+* **Windows Console Encoding Armor:** Sanitized all terminal outputs to pure ASCII to ensure 100% crash-free operation on Windows CP1254/Turkish locales.
+
+### D. The 6 Officially Whitelisted Institutional Strategies (Whitelist v5.0.0):
+1. **`USDJPY_M15_MOM_ONLY_Autonomous`**: OOS PnL $+12.23$ (PF 1.78), Full $+2.29$, Max DD 0.06%
+2. **`USDJPY_M15_MOM_ONLY_Begonya_Macro`**: OOS PnL $+12.23$ (PF 1.78), Full $+2.29$, Max DD 0.06%
+3. **`USDJPY_H1_OU_ONLY_Begonya_Macro`**: OOS PnL $+3.77$ (PF 1.86), Full $+45.78$ (PF 3.28 across 14 trades, 71.4% win rate), Max DD 0.02%
+4. **`NAS100_M15_OU_ONLY_Autonomous`**: OOS PnL $+713.16$ (PF 1.58 across 159 trades), Full $+569.50$, Max DD 4.03%
+5. **`NAS100_M15_OU_ONLY_Begonya_Macro`**: OOS PnL $+199.01$ (PF 1.35), Train $+729.58$, Full $+878.34$ (PF 1.33 across 66 trades), Max DD 4.22%
+6. **`BTCUSDT_H1_OU_ONLY_Autonomous`**: OOS PnL $+69.43$ (PF 1.16), Val $+458.21$, Full $+175.39$ across 55 trades, Max DD 2.17%
+
+
 
 

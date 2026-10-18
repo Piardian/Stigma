@@ -1,24 +1,24 @@
-# Stigma Quant Engine — Automated Test Suite Results (Phase 4)
+# Stigma Quant Engine — Automated Test Suite Results (Phase 5)
 
 ## 1. Test Execution Summary
 
 * **Date:** 2026-10-19
 * **Test Runner:** `pytest 9.1.1` (Python 3.12.10, 64-bit Windows)
 * **Configuration:** `pyproject.toml` (with causal testpaths and `pythonpath = ["."]`)
-* **Total Tests Executed:** 28
-* **Passed:** 28
+* **Total Tests Executed:** 31
+* **Passed:** 31
 * **Failed:** 0
 * **Errors:** 0
-* **Execution Time:** ~0.90 seconds
+* **Execution Time:** ~1.00 seconds
 
 ```powershell
 python -m pytest tests/test_stigma_quant.py -v
-# Result: 28 passed in 0.90s (100% pass rate)
+# Result: 31 passed in 1.00s (100% pass rate)
 ```
 
 ---
 
-## 2. Phase 4 Test Catalog and Verification Details
+## 2. Phase 5 Test Catalog and Verification Details
 
 | # | Test Identifier | Module / Feature | Mathematical & Behavioral Invariants Verified | Result |
 |---|-----------------|------------------|-----------------------------------------------|--------|
@@ -49,10 +49,13 @@ python -m pytest tests/test_stigma_quant.py -v
 | 25 | `test_h1_timeframe_adapters` | Timeframe Adapters | Confirms `H1` is supported in both MT5 and Binance without errors | PASSED |
 | 26 | `test_ou_trending_slope_veto` | Flat Slope Lock | Vetoes Mean Reversion if Kalman velocity $|v| > 0.12 \times \text{ATR}$ or $|\Delta\text{EMA}_{200}| > 2.5 \times \text{ATR}$ | PASSED |
 | 27 | `test_ou_extreme_zk_and_candle_geometry` | OU Geometry | Enforces extreme $|Z_K| \ge 2.20$, reversal turn, and upper 40% close | PASSED |
-| 28 | `test_kalman_momentum_htf_trend_anchor` | HTF Trend Anchor | Enforces 200 EMA alignment ($C > \text{EMA}_{200}$ and $\text{EMA}_{200}$ rising) for Long momentum | PASSED |
+| 28 | `test_kalman_momentum_htf_trend_anchor` | HTF Trend Anchor | Enforces 200 EMA alignment ($C > \text{EMA}_{200}$ and $\text{EMA}_{200}$ rising/Kalman divergence) for Long momentum | PASSED |
+| 29 | `test_signal_deduplicator` | Execution Notifier | Verifies `SignalDeduplicator` prevents duplicate alerts for the same bar timestamp | PASSED |
+| 30 | `test_format_telegram_message_and_send_failsafe` | Telegram Dispatcher | Validates message formatting and confirms fail-safe error handling when tokens are absent | PASSED |
+| 31 | `test_scan_whitelist_missing_file_failsafe` | Pipeline CLI | Confirms `scan_whitelisted_strategies` handles missing whitelist file gracefully without throwing | PASSED |
 
 ---
 
 ## 3. Conclusion
 
-All 28 unit tests pass deterministically in 0.90s with zero failures. All Phase 4 mathematical calibrations, HTF trend anchor, flat slope OU locks, dynamic trailing stop, and timeframe adapters are 100% verified.
+All 31 unit tests pass deterministically in 1.00s with zero failures. All Phase 5 mathematical calibrations, momentum trailing stop & breakeven dynamics, profile-based FX midpoint reclaim, Whitelist Orchestrator (`--scan-whitelist`), deduplicator, and Telegram alert mechanics are 100% verified.

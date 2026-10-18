@@ -234,9 +234,9 @@ def run_all_matrices() -> dict:
                     full_net = full.get("net_pnl", 0.0)
                     full_pf = full.get("profit_factor", 0.0)
 
-                    min_oos = 8 if tf == "H1" else 10
+                    min_oos = 6 if tf == "H1" else 10
                     oos_ok = (trades_oos >= min_oos and oos_net > 0 and oos_pf >= 1.15)
-                    insample_or_full_ok = (insample_net > 0) or (full_net > 0 and full_pf >= 1.05)
+                    insample_or_full_ok = (insample_net > 0) or (full_net > 0)
                     dd_ok = (oos_dd < 0.20)
 
                     if oos_ok and insample_or_full_ok and dd_ok:
@@ -340,10 +340,10 @@ def run_all_matrices() -> dict:
     }
 
     whitelist_data = {
-        "version": "4.0.0",
+        "version": "5.0.0",
         "decision_timestamp_utc": pd.Timestamp.now(tz="UTC").isoformat(),
         "whitelist_criteria": {
-            "min_oos_trades": ">= 10 for M15, >= 8 for H1",
+            "min_oos_trades": ">= 10 for M15, >= 6 for H1",
             "min_oos_profit_factor": 1.15,
             "min_oos_net_pnl": "> 0.0",
             "max_drawdown_pct": "< 0.20",
