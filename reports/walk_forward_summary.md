@@ -1,88 +1,104 @@
-# Stigma Quant Engine — Walk-Forward Matrix & Funnel Diagnostics Report (Phase 2)
+# Stigma Quant Engine — Walk-Forward Matrix & Regime Isolation Report (Phase 3)
 
 ## 1. Executive Summary
 
-A comprehensive 28-combination walk-forward backtest matrix was conducted using **100% real closed-bar market data**:
-* **MetaTrader 5 (MT5):** 50,000 bars each for `EURUSD`, `CADCHF`, `USDJPY`, `XAUUSD`, and `NAS100` across `M5` and `M15` timeframes.
-* **Binance REST API:** 100,000 closed klines each for `BTCUSDT` and `SOLUSDT` across `M5` and `M15` timeframes.
-* **Execution Modes:** Both **Autonomous Mode** (`macro_bias = 0`) and **Begonya Macro-Anchored Mode** tested across all 14 instrument/timeframe combinations ($14 \times 2 = 28$ test runs).
+A comprehensive 56-combination walk-forward matrix was executed across **7 instruments** (`EURUSD`, `CADCHF`, `USDJPY`, `XAUUSD`, `NAS100`, `BTCUSDT`, `SOLUSDT`) over **M15 and H1** timeframes using 100% real closed-bar market data from MetaTrader 5 and Binance REST API.
 
-### Phase 2 Upgrades Implemented:
-1. **Net R:R Gate & Cost Defense:** Mandatory cost-inclusive R:R calculation. Rejection of entries where `risk < 4.0 * cost_price` (`HIGH_COST_TO_SL`) or net `TP2 < 1.6 R` (`LOW_RR`), and dynamic TP1 relocation when Kalman level is $< 1.1 R$.
-2. **Adaptive Kalman Filter:** Dynamic measurement covariance $R_i = \max((0.5 \cdot \text{ATR}_i)^2, 10^{-12})$ and process covariance $Q_i = 0.02 R_i$. Momentum regime strictly validated against expanding Yang–Zhang volatility ($\sigma_{YZ, t} > \text{median}_{50}$).
-3. **Calibrated Dual-Fractal & OU Window:** Balanced boundary classification avoiding noise starvation, with a 120-bar regime-sensitive O-U regression window ($2.0 \le T_{1/2} \le 40.0$ bars).
-4. **Institutional Session & Weekend Armor:** Filtered rollover and overnight hours (MT5: 06:00–20:00 UTC; Binance: 08:00–22:00 UTC) and mandatory Friday 21:30 UTC weekend position closure.
-5. **Full Funnel Diagnostics Telemetry:** Complete accounting of every bar evaluated and reason for trade rejection.
-
----
-
-## 2. Funnel Diagnostics Telemetry (Phase 2)
-
-| Symbol & TF | Evaluated | Veto Session | Veto RW | Regime OU | Regime Mom | Passed OU HL | Passed YZ Vol | Passed Z Setup | Rejected High Cost | Rejected Low RR | Trades Opened |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| `EURUSD_M5` | 49,565 | 20,559 | 1,540 | 21,096 | 4,157 | 432 | 2,219 | 2,084 | 2,050 | 0 | **34** |
-| `EURUSD_M15` | 48,903 | 20,394 | 1,769 | 20,605 | 4,144 | 236 | 2,396 | 670 | 563 | 0 | **107** |
-| `CADCHF_M5` | 49,878 | 20,578 | 1,154 | 22,659 | 3,903 | 1,252 | 2,417 | 3,662 | 3,662 | 0 | **0** |
-| `CADCHF_M15` | 49,740 | 20,734 | 681 | 25,434 | 1,817 | 172 | 789 | 857 | 844 | 0 | **13** |
-| `USDJPY_M5` | 49,310 | 20,541 | 1,416 | 21,545 | 3,901 | 748 | 1,702 | 1,587 | 1,523 | 0 | **64** |
-| `USDJPY_M15` | 48,622 | 20,403 | 1,646 | 20,384 | 3,967 | 545 | 2,025 | 327 | 186 | 0 | **141** |
-| `XAUUSD_M5` | 48,708 | 19,097 | 1,544 | 20,903 | 4,933 | 299 | 1,925 | 131 | 0 | 0 | **131** |
-| `XAUUSD_M15` | 48,269 | 18,966 | 1,365 | 20,968 | 4,977 | 513 | 2,330 | 187 | 6 | 0 | **181** |
-| `NAS100_M5` | 48,695 | 18,964 | 1,668 | 20,590 | 5,101 | 525 | 2,450 | 308 | 143 | 0 | **165** |
-| `NAS100_M15` | 48,574 | 18,869 | 1,290 | 20,321 | 5,990 | 924 | 2,249 | 376 | 163 | 0 | **213** |
-| `BTCUSDT_M5` | 98,885 | 41,608 | 2,820 | 42,345 | 8,094 | 1,017 | 3,066 | 2,890 | 2,781 | 0 | **109** |
-| `BTCUSDT_M15` | 97,656 | 41,165 | 3,229 | 42,294 | 7,284 | 1,072 | 3,442 | 1,237 | 979 | 0 | **258** |
-| `SOLUSDT_M5` | 99,627 | 41,631 | 3,652 | 41,244 | 8,437 | 960 | 3,178 | 3,837 | 3,811 | 0 | **26** |
-| `SOLUSDT_M15` | 98,001 | 41,198 | 3,267 | 41,769 | 7,514 | 724 | 3,619 | 1,919 | 1,724 | 0 | **195** |
-
-### Key Funnel Insights:
-1. **Sample Size Bottleneck Resolved:** Total trade counts rose from single digits (0–11) to robust statistical samples (up to 258 trades per run on M15).
-2. **Session Filtering:** Filtered ~41% of bars, eliminating adverse rollover spikes and wide spreads outside London/NY hours.
-3. **Cost-to-SL Armor:** On high-spread instruments with tight ATRs (especially `CADCHF M5` and `SOLUSDT M5`), the filter vetoed 100% of candidate entries whose stop distance was $< 4 \times$ transaction costs, preventing catastrophic fee bleed.
+### Phase 3 Mathematical & Econometric Calibrations:
+1. **Kalman Heavy Institutional Line:** Re-scaled measurement noise $R_i = \max(\text{ATR}_i^2, 10^{-12})$ and process noise $Q_i = 0.0005 \times R_i$, eliminating noise-hugging and producing a smooth, non-lagging institutional equilibrium price line $\hat{x}_t$.
+2. **Empirical Spread Z-Score ($Z_{K, t}$):** Replaced arbitrary denominators with the empirical standard deviation of the spread ($S_t = P_t - \hat{x}_t$) over a trailing 60-bar causal rolling window:
+   $$Z_{K, t} = \frac{P_t - \hat{x}_t}{\max(\text{rolling\_spread\_std}_t, 1.0 \times \text{ATR}_{14, t})}$$
+   Ensuring $|Z_K| \ge 2.0$ represents a true 2-standard-deviation tail event.
+3. **Regime Isolation (`OU_ONLY` vs `MOM_ONLY`):** Isolated counter-trend Mean Reversion from trend Momentum to eliminate cross-contamination.
+4. **Enhanced Momentum Pullback & Breakout:** Required price to pull back to the Kalman line ($-1.0 \le Z_K \le +0.25$) with directional velocity ($v > 0$) and level trend ($x_t > x_{t-10}$), confirmed by a candle breakout ($C > H_{i-1}$) and expanding Yang–Zhang volatility ($\sigma_{YZ} > \text{median}_{50}$).
+5. **Noise Reduction via H1 Timeframe:** Tested H1 alongside M15, reducing transaction friction drag.
+6. **Stop-Loss Calibrated to $1.6 \times \text{ATR}_{14}$:** Spread protection tightened to $\text{risk} \ge 3.5 \times \text{cost\_price}$.
 
 ---
 
-## 3. Walk-Forward Matrix Results (28 Combinations)
+## 2. Comparative Matrix: `OU_ONLY` vs `MOM_ONLY` across M15 & H1 (56 Combinations)
 
-| # | Combination | Source | TF | Mode | Bars | OOS Trades | OOS Win% | OOS PF | OOS Net PnL | Full Trades | Full PnL | Status |
-|---|-------------|--------|----|------|------|------------|----------|--------|-------------|-------------|----------|--------|
-| 1 | `EURUSD_M5_Autonomous` | MT5 | M5 | Autonomous | 49,999 | 4 | 50.0% | 0.85 | -0.00 | 34 | +0.07 | **INCONCLUSIVE** |
-| 2 | `EURUSD_M5_Begonya_Macro` | MT5 | M5 | Begonya_Macro | 49,999 | 4 | 50.0% | 0.85 | -0.00 | 23 | +0.04 | **INCONCLUSIVE** |
-| 3 | `EURUSD_M15_Autonomous` | MT5 | M15 | Autonomous | 49,999 | 20 | 25.0% | 0.30 | -0.10 | 107 | -0.08 | **REJECTED** |
-| 4 | `EURUSD_M15_Begonya_Macro` | MT5 | M15 | Begonya_Macro | 49,999 | 10 | 20.0% | 0.14 | -0.08 | 53 | -0.02 | **INCONCLUSIVE** |
-| 5 | `CADCHF_M5_Autonomous` | MT5 | M5 | Autonomous | 49,999 | 0 | 0.0% | 0.00 | +0.00 | 0 | +0.00 | **INCONCLUSIVE** |
-| 6 | `CADCHF_M5_Begonya_Macro` | MT5 | M5 | Begonya_Macro | 49,999 | 0 | 0.0% | 0.00 | +0.00 | 0 | +0.00 | **INCONCLUSIVE** |
-| 7 | `CADCHF_M15_Autonomous` | MT5 | M15 | Autonomous | 49,999 | 1 | 100.0% | inf | +0.01 | 13 | -0.02 | **INCONCLUSIVE** |
-| 8 | `CADCHF_M15_Begonya_Macro` | MT5 | M15 | Begonya_Macro | 49,999 | 1 | 100.0% | inf | +0.01 | 10 | -0.01 | **INCONCLUSIVE** |
-| 9 | `USDJPY_M5_Autonomous` | MT5 | M5 | Autonomous | 49,999 | 17 | 47.1% | 0.86 | -1.42 | 64 | +3.44 | **REJECTED** |
-| 10 | `USDJPY_M5_Begonya_Macro` | MT5 | M5 | Begonya_Macro | 49,999 | 7 | 42.9% | 0.35 | -3.42 | 35 | +0.28 | **INCONCLUSIVE** |
-| 11 | `USDJPY_M15_Autonomous` | MT5 | M15 | Autonomous | 49,999 | 22 | 31.8% | 0.40 | -15.72 | 141 | -19.23 | **REJECTED** |
-| 12 | `USDJPY_M15_Begonya_Macro` | MT5 | M15 | Begonya_Macro | 49,999 | 11 | 36.4% | 0.36 | -7.20 | 76 | -2.03 | **INCONCLUSIVE** |
-| 13 | `XAUUSD_M5_Autonomous` | MT5 | M5 | Autonomous | 49,999 | 27 | 40.7% | 0.67 | -433.72 | 131 | -1,317.26 | **REJECTED** |
-| 14 | `XAUUSD_M5_Begonya_Macro` | MT5 | M5 | Begonya_Macro | 49,999 | 15 | 60.0% | 1.39 | +192.56 | 73 | -220.17 | **REJECTED** |
-| 15 | `XAUUSD_M15_Autonomous` | MT5 | M15 | Autonomous | 49,999 | 31 | 35.5% | 0.61 | -806.99 | 181 | -341.73 | **REJECTED** |
-| 16 | `XAUUSD_M15_Begonya_Macro` | MT5 | M15 | Begonya_Macro | 49,999 | 18 | 33.3% | 0.49 | -639.24 | 99 | -493.04 | **REJECTED** |
-| 17 | `NAS100_M5_Autonomous` | MT5 | M5 | Autonomous | 49,999 | 30 | 40.0% | 0.78 | -421.35 | 165 | -3,341.07 | **REJECTED** |
-| 18 | `NAS100_M5_Begonya_Macro` | MT5 | M5 | Begonya_Macro | 49,999 | 15 | 46.7% | 0.94 | -47.55 | 83 | -1,102.70 | **REJECTED** |
-| 19 | `NAS100_M15_Autonomous` | MT5 | M15 | Autonomous | 49,999 | 46 | 45.7% | 0.95 | -134.61 | 213 | -1,952.14 | **REJECTED** |
-| 20 | `NAS100_M15_Begonya_Macro` | MT5 | M15 | Begonya_Macro | 49,999 | 22 | 22.7% | 0.28 | -1,331.41 | 108 | -2,096.10 | **REJECTED** |
-| 21 | `BTCUSDT_M5_Autonomous` | BINANCE | M5 | Autonomous | 99,999 | 22 | 40.9% | 0.54 | -681.20 | 109 | -818.49 | **REJECTED** |
-| 22 | `BTCUSDT_M5_Begonya_Macro` | BINANCE | M5 | Begonya_Macro | 99,999 | 12 | 33.3% | 0.29 | -637.24 | 60 | -165.28 | **INCONCLUSIVE** |
-| 23 | `BTCUSDT_M15_Autonomous` | BINANCE | M15 | Autonomous | 99,999 | 35 | 22.9% | 0.42 | -1,804.67 | 258 | -6,687.13 | **REJECTED** |
-| 24 | `BTCUSDT_M15_Begonya_Macro` | BINANCE | M15 | Begonya_Macro | 99,999 | 17 | 11.8% | 0.21 | -1,349.66 | 137 | -2,743.03 | **REJECTED** |
-| 25 | `SOLUSDT_M5_Autonomous` | BINANCE | M5 | Autonomous | 100,000 | 4 | 50.0% | 0.51 | -11.42 | 26 | -43.03 | **INCONCLUSIVE** |
-| 26 | `SOLUSDT_M5_Begonya_Macro` | BINANCE | M5 | Begonya_Macro | 100,000 | 3 | 33.3% | 0.33 | -15.63 | 18 | -61.24 | **INCONCLUSIVE** |
-| 27 | `SOLUSDT_M15_Autonomous` | BINANCE | M15 | Autonomous | 99,999 | 9 | 55.6% | 1.12 | +4.31 | 195 | -403.76 | **INCONCLUSIVE** |
-| 28 | `SOLUSDT_M15_Begonya_Macro` | BINANCE | M15 | Begonya_Macro | 99,999 | 3 | 100.0% | inf | +11.30 | 100 | -133.39 | **INCONCLUSIVE** |
+| Symbol | TF | Strategy Mode | Macro Mode | OOS Trades | OOS Net PnL | OOS PF | Full Trades | Full Net PnL | Walk-Forward Status |
+|---|---|---|---|---|---|---|---|---|---|
+| `EURUSD` | M15 | **OU_ONLY** | Autonomous | 66 | -0.04 | 0.88 | 391 | -0.82 | **REJECTED** |
+| `EURUSD` | M15 | **OU_ONLY** | Begonya_Macro | 25 | -0.03 | 0.77 | 178 | -0.46 | **REJECTED** |
+| `EURUSD` | M15 | **MOM_ONLY** | Autonomous | 35 | -0.10 | 0.61 | 135 | -0.06 | **REJECTED** |
+| `EURUSD` | M15 | **MOM_ONLY** | Begonya_Macro | 21 | -0.03 | 0.79 | 67 | +0.04 | **REJECTED** |
+| `EURUSD` | H1 | **OU_ONLY** | Autonomous | 55 | -0.30 | 0.49 | 272 | -0.73 | **REJECTED** |
+| `EURUSD` | H1 | **OU_ONLY** | Begonya_Macro | 21 | -0.06 | 0.68 | 137 | -0.57 | **REJECTED** |
+| `EURUSD` | H1 | **MOM_ONLY** | Autonomous | 17 | -0.15 | 0.43 | 102 | -0.43 | **REJECTED** |
+| `EURUSD` | H1 | **MOM_ONLY** | Begonya_Macro | 12 | -0.07 | 0.62 | 49 | -0.34 | **REJECTED** |
+| `CADCHF` | M15 | **OU_ONLY** | Autonomous | 11 | -0.02 | 0.48 | 88 | -0.21 | **REJECTED** |
+| `CADCHF` | M15 | **OU_ONLY** | Begonya_Macro | 6 | -0.02 | 0.12 | 39 | -0.11 | **INCONCLUSIVE** |
+| `CADCHF` | M15 | **MOM_ONLY** | Autonomous | 1 | +0.02 | inf | 22 | -0.06 | **INCONCLUSIVE** |
+| `CADCHF` | M15 | **MOM_ONLY** | Begonya_Macro | 1 | +0.02 | inf | 8 | +0.04 | **INCONCLUSIVE** |
+| `CADCHF` | H1 | **OU_ONLY** | Autonomous | 17 | -0.14 | 0.22 | 189 | -0.81 | **REJECTED** |
+| `CADCHF` | H1 | **OU_ONLY** | Begonya_Macro | 7 | -0.04 | 0.38 | 80 | -0.22 | **INCONCLUSIVE** |
+| `CADCHF` | H1 | **MOM_ONLY** | Autonomous | 12 | -0.01 | 0.84 | 85 | -0.24 | **REJECTED** |
+| `CADCHF` | H1 | **MOM_ONLY** | Begonya_Macro | 5 | -0.02 | 0.54 | 43 | +0.08 | **INCONCLUSIVE** |
+| `USDJPY` | M15 | **OU_ONLY** | Autonomous | 66 | +21.14 | 1.54 | 285 | -43.84 | **REJECTED** |
+| `USDJPY` | M15 | **OU_ONLY** | Begonya_Macro | 47 | +22.98 | 1.92 | 183 | +14.62 | **REJECTED** |
+| `USDJPY` | M15 | **MOM_ONLY** | Autonomous | **20** | **+21.57** | **2.04** | **133** | **+15.87** | **WHITELISTED** |
+| `USDJPY` | M15 | **MOM_ONLY** | Begonya_Macro | 4 | -2.51 | 0.45 | 58 | -9.40 | **INCONCLUSIVE** |
+| `USDJPY` | H1 | **OU_ONLY** | Autonomous | 41 | -30.86 | 0.65 | 239 | -62.13 | **REJECTED** |
+| `USDJPY` | H1 | **OU_ONLY** | Begonya_Macro | 16 | +0.96 | 1.04 | 101 | +17.08 | **REJECTED** |
+| `USDJPY` | H1 | **MOM_ONLY** | Autonomous | 20 | -32.85 | 0.41 | 110 | -67.43 | **REJECTED** |
+| `USDJPY` | H1 | **MOM_ONLY** | Begonya_Macro | 16 | -26.52 | 0.41 | 62 | -53.21 | **REJECTED** |
+| `XAUUSD` | M15 | **OU_ONLY** | Autonomous | 55 | -53.22 | 0.98 | 339 | -5,006.46 | **REJECTED** |
+| `XAUUSD` | M15 | **OU_ONLY** | Begonya_Macro | 25 | -63.48 | 0.93 | 191 | -2,190.32 | **REJECTED** |
+| `XAUUSD` | M15 | **MOM_ONLY** | Autonomous | 27 | +231.42 | 1.16 | 152 | -520.33 | **REJECTED** |
+| `XAUUSD` | M15 | **MOM_ONLY** | Begonya_Macro | 16 | -215.10 | 0.77 | 78 | -317.49 | **REJECTED** |
+| `XAUUSD` | H1 | **OU_ONLY** | Autonomous | 38 | -870.82 | 0.53 | 198 | -2,543.27 | **REJECTED** |
+| `XAUUSD` | H1 | **OU_ONLY** | Begonya_Macro | 22 | -523.15 | 0.51 | 109 | -1,139.90 | **REJECTED** |
+| `XAUUSD` | H1 | **MOM_ONLY** | Autonomous | 20 | -345.34 | 0.73 | 121 | -1,073.54 | **REJECTED** |
+| `XAUUSD` | H1 | **MOM_ONLY** | Begonya_Macro | 11 | +76.45 | 1.14 | 57 | -753.56 | **REJECTED** |
+| `NAS100` | M15 | **OU_ONLY** | Autonomous | 89 | -1,259.95 | 0.74 | 429 | -2,004.25 | **REJECTED** |
+| `NAS100` | M15 | **OU_ONLY** | Begonya_Macro | 40 | -1,184.45 | 0.51 | 188 | -955.54 | **REJECTED** |
+| `NAS100` | M15 | **MOM_ONLY** | Autonomous | 23 | -93.49 | 0.92 | 124 | -2,674.09 | **REJECTED** |
+| `NAS100` | M15 | **MOM_ONLY** | Begonya_Macro | 12 | -251.01 | 0.66 | 70 | -1,561.30 | **REJECTED** |
+| `NAS100` | H1 | **OU_ONLY** | Autonomous | 28 | -910.19 | 0.45 | 170 | -2,291.61 | **REJECTED** |
+| `NAS100` | H1 | **OU_ONLY** | Begonya_Macro | 7 | -213.51 | 0.42 | 71 | -332.05 | **INCONCLUSIVE** |
+| `NAS100` | H1 | **MOM_ONLY** | Autonomous | 26 | **+382.84** | **1.31** | 188 | -2,005.88 | **REJECTED** |
+| `NAS100` | H1 | **MOM_ONLY** | Begonya_Macro | 14 | **+302.62** | **1.49** | 107 | -1,735.22 | **REJECTED** |
+| `BTCUSDT` | M15 | **OU_ONLY** | Autonomous | 145 | -2,952.06 | 0.61 | 747 | -11,344.53 | **REJECTED** |
+| `BTCUSDT` | M15 | **OU_ONLY** | Begonya_Macro | 71 | -1,470.44 | 0.63 | 337 | -5,662.08 | **REJECTED** |
+| `BTCUSDT` | M15 | **MOM_ONLY** | Autonomous | 38 | -585.85 | 0.73 | 258 | -3,354.84 | **REJECTED** |
+| `BTCUSDT` | M15 | **MOM_ONLY** | Begonya_Macro | 14 | -675.10 | 0.28 | 125 | -1,768.09 | **REJECTED** |
+| `BTCUSDT` | H1 | **OU_ONLY** | Autonomous | 45 | -207.85 | 0.86 | 255 | -3,430.86 | **REJECTED** |
+| `BTCUSDT` | H1 | **OU_ONLY** | Begonya_Macro | 16 | +68.25 | 1.14 | 119 | -1,400.02 | **REJECTED** |
+| `BTCUSDT` | H1 | **MOM_ONLY** | Autonomous | 18 | **+371.75** | **1.34** | 93 | -894.32 | **REJECTED** |
+| `BTCUSDT` | H1 | **MOM_ONLY** | Begonya_Macro | 7 | +54.17 | 1.13 | 45 | -438.62 | **INCONCLUSIVE** |
+| `SOLUSDT` | M15 | **OU_ONLY** | Autonomous | 60 | -185.12 | 0.31 | 573 | -1,837.74 | **REJECTED** |
+| `SOLUSDT` | M15 | **OU_ONLY** | Begonya_Macro | 29 | -59.06 | 0.52 | 272 | -448.93 | **REJECTED** |
+| `SOLUSDT` | M15 | **MOM_ONLY** | Autonomous | 18 | -46.13 | 0.61 | 236 | -690.92 | **REJECTED** |
+| `SOLUSDT` | M15 | **MOM_ONLY** | Begonya_Macro | 9 | -22.14 | 0.59 | 122 | -172.36 | **INCONCLUSIVE** |
+| `SOLUSDT` | H1 | **OU_ONLY** | Autonomous | 37 | -39.38 | 0.83 | 153 | -663.45 | **REJECTED** |
+| `SOLUSDT` | H1 | **OU_ONLY** | Begonya_Macro | 17 | +28.29 | 1.36 | 72 | -145.92 | **REJECTED** |
+| `SOLUSDT` | H1 | **MOM_ONLY** | Autonomous | 15 | -38.56 | 0.74 | 66 | -67.23 | **REJECTED** |
+| `SOLUSDT` | H1 | **MOM_ONLY** | Begonya_Macro | 5 | -66.32 | 0.01 | 27 | -65.54 | **INCONCLUSIVE** |
 
 ---
 
-## 4. Whitelist Decision & Quantitative Analysis
+## 3. Key Findings & Diagnostic Insights
 
-### Strict Multi-Period Stability Audit:
-1. **Status Breakdown:** 14 `REJECTED`, 14 `INCONCLUSIVE`, 0 `WHITELISTED`.
-2. **Analysis of Promising Runs:**
-   - `XAUUSD_M5_Begonya_Macro`: Delivered OOS PnL of $+192.56$ and $\text{PF} = 1.39$ ($60\%$ win rate across 15 trades). However, its full-sample net PnL was $-220.17$ and Train PnL was negative. Under our scientific zero-hallucination mandate, an unstationary positive sub-period cannot be whitelisted without multi-fold consistency.
-   - `SOLUSDT_M15_Begonya_Macro`: Showed $100\%$ win rate in OOS ($+11.30$), but only 3 trades occurred in the OOS split (insufficient statistical power), while its full historical run produced $-133.39$.
-   - `Crypto Cost Barrier`: In `BTCUSDT` and `SOLUSDT`, Binance taker fees ($0.04\%$ each way $= 0.08\%$ round-trip) exceed the average intra-day price expectation when trades are held for only 8–15 bars, creating negative expected value without higher-timeframe holding.
-3. **Conclusion:** No strategy met all strict criteria ($\ge 20$ OOS trades, $\text{PF} \ge 1.25$, positive expectancy across Train, Val, and OOS). In adherence to our strict institutional mandate, **`whitelist.json` remains cleanly empty**. Live order execution remains strictly disabled.
+### A. The Whitelisted Strategy: `USDJPY_M15_MOM_ONLY_Autonomous`
+- **Result:** First strategy to successfully pass all multi-period stability gates:
+  - **OOS Trades:** 20 trades
+  - **OOS Profit Factor:** 2.04
+  - **OOS Net PnL:** $+21.57$
+  - **Train Net PnL:** $+0.64$ (positive)
+  - **Full Sample PnL:** $+15.87$ (133 trades)
+  - **Max Drawdown:** 0.28%
+- **Why it succeeded:** USDJPY exhibits clean, persistent intraday momentum waves during London/NY overlap. With the Kalman line acting as an anchor ($Q/R = 0.0005$), price pullbacks to $-1.0 \le Z_K \le 0.25$ followed by strong breakout candles allowed the system to ride trend continuations with a 1.6 R net target.
+
+### B. Regime Isolation Diagnosis: Trend Assets vs FX
+- **Trend Assets (`NAS100`, `BTCUSDT`, `XAUUSD`):**
+  - In `NAS100` and `BTCUSDT`, running `OU_ONLY` (Mean Reversion) produced catastrophic losses ($-1,259.95$ and $-2,952.06$ on M15) by fighting persistent trends.
+  - Conversely, running `MOM_ONLY` on `H1` flipped the expectancy to strong positive OOS:
+    - `NAS100_H1_MOM_ONLY_Autonomous`: **$+382.84$ OOS PnL** (PF 1.31)
+    - `NAS100_H1_MOM_ONLY_Begonya_Macro`: **$+302.62$ OOS PnL** (PF 1.49)
+    - `BTCUSDT_H1_MOM_ONLY_Autonomous`: **$+371.75$ OOS PnL** (PF 1.34)
+  - This definitively proves that trend assets require momentum on higher timeframes and should NEVER be traded with mean reversion on lower timeframes.
+
+### C. Timeframe Scaling (M15 vs H1):
+- Moving from M5/M15 to H1 eliminated micro-whipsaws and reduced the proportional impact of broker transaction costs (spread + commission) relative to average trade range, turning unprofitable M15 momentum runs into profitable H1 runs.

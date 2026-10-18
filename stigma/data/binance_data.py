@@ -11,7 +11,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 BASE = "https://api.binance.com/api/v3/klines"
-INTERVALS = {"M5": "5m", "M15": "15m"}
+INTERVALS = {"M5": "5m", "M15": "15m", "H1": "1h"}
 SUPPORTED_SYMBOLS = {"BTCUSDT", "SOLUSDT"}
 
 def fetch_binance(
@@ -31,7 +31,7 @@ def fetch_binance(
     """
     tf_upper = timeframe.upper()
     if tf_upper not in INTERVALS:
-        raise ValueError(f"Timeframe must be M5 or M15, got '{timeframe}'")
+        raise ValueError(f"Timeframe must be M5, M15, or H1, got '{timeframe}'")
 
     sym_upper = symbol.upper()
     rows: list[list] = []

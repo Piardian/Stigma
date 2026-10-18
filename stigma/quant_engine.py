@@ -107,18 +107,21 @@ def run_kalman_filter_1d(
     measurement_noise: float = 1e-3,
     adaptive: bool = True,
 ) -> KalmanResult:
-    """Adaptive or static constant-velocity two-state Kalman filter, O(N), causal.
+    """Adaptive heavy-line or static constant-velocity two-state Kalman filter, O(N), causal.
 
     In adaptive mode:
-      - Local measurement noise R_i = max((0.5 * atr[i]) ** 2, 1e-12)
-      - Local process noise Q_i = 0.02 * R_i
+      - Local measurement noise R_i = max(atr[i] ** 2, 1e-12)
+      - Heavy institutional line process noise Q_i = 0.0005 * R_i
       - Eliminates nominal asset price distortion across FX, Metals, Indices, and Crypto.
+
+    Empirical Spread Z-Score:
+      - Spread S_t = P_t - x_hat_t
+      - 60-bar rolling spread standard deviation: rolling_spread_std
+      - Z_K,t = (P_t - x_hat_t) / max(rolling_spread_std, 1.0 * ATR14)
 
     State vector: x_t = [level, velocity]^T
     Transition:   F = [[1, 1], [0, 1]]
     Observation:  H = [1, 0]
-    Innovation Z-score:
-        Z_K = (P_t - x_hat_{t|t-1}[0]) / max(sqrt(S_t), 0.5 * ATR14)
     """
     p = np.asarray(prices, dtype=float)
     a = np.broadcast_to(np.asarray(atr, dtype=float), p.shape)
@@ -141,7 +144,7 @@ def run_kalman_filter_1d(
 
     if adaptive:
         ai0 = a[i0] if (np.isfinite(a[i0]) and a[i0] > 0) else 0.001 * x0
-        r_init = max((0.5 * ai0) ** 2, 1e-12)
+        r_init = max(ai0 ** 2, 1e-12)
         c00 = r_init
         c01 = 0.0
         c11 = r_init
@@ -160,10 +163,10 @@ def run_kalman_filter_1d(
         ai = a[i]
 
         if adaptive:
-            # Dynamic variance scaling based on local ATR
-            sig_i = 0.5 * ai if (np.isfinite(ai) and ai > 0) else (0.5 * a[i - 1] if (np.isfinite(a[i - 1]) and a[i - 1] > 0) else 1e-4)
+            # Dynamic variance scaling based on local ATR: R_i = ATR^2, Q_i = 0.0005 * R_i
+            sig_i = ai if (np.isfinite(ai) and ai > 0) else (a[i - 1] if (np.isfinite(a[i - 1]) and a[i - 1] > 0) else 1e-4)
             r_val = max(sig_i ** 2, 1e-12)
-            q_val = 0.02 * r_val
+            q_val = 0.0005 * r_val
             q00 = 0.25 * q_val
             q01 = 0.5 * q_val
             q11 = 1.0 * q_val
@@ -208,11 +211,19 @@ def run_kalman_filter_1d(
 
         level[i] = x0
         velocity[i] = x1
-        std_val = np.sqrt(s_val)
-        std[i] = std_val
+        std[i] = np.sqrt(s_val)
 
-        floor = max(0.5 * ai, 1e-12) if np.isfinite(ai) and ai > 0 else 1e-12
-        z[i] = innovation / max(std_val, floor)
+    # -------------------------------------------------------------
+    # Empirical Spread Z-Score:
+    # S_t = P_t - level_t
+    # rolling_spread_std over trailing 60 bars (min_periods=20)
+    # Z_K = S_t / max(rolling_spread_std_t, 1.0 * ATR14_t)
+    # -------------------------------------------------------------
+    spread = p - level
+    s_spread = pd.Series(spread).rolling(60, min_periods=20).std().to_numpy()
+    s_atr = np.where(np.isfinite(a) & (a > 0), a, 1e-4)
+    denom = np.where(np.isfinite(s_spread) & (s_spread > 0), np.maximum(s_spread, s_atr), s_atr)
+    z = np.where(np.isfinite(spread), spread / np.maximum(denom, 1e-12), 0.0)
 
     return KalmanResult(level, velocity, std, z)
 
@@ -340,20 +351,33 @@ def evaluate_stigma_trigger(
     atr,
     open_,
     close,
+    high_=None,
+    low_=None,
     variance_ratio: float = float("nan"),
     macro_bias: int = 0,
     cost_price: float = 0.0,
     sigma_yz: float = float("nan"),
     sigma_yz_median: float = float("nan"),
+    strategy_mode: str = "BOTH",
     return_reason: bool = False,
 ) -> dict[str, Any] | tuple[dict[str, Any] | None, str]:
     """Evaluate causal trigger conditions with Net R:R Gate and Cost-to-SL protection."""
     def fail(reason: str):
         return (None, reason) if return_reason else None
 
+    # Regime isolation filter
+    mode_upper = strategy_mode.upper()
+    if mode_upper == "OU_ONLY" and regime != "OU_MEAN_REVERSION":
+        return fail("STRATEGY_MODE_VETO")
+    elif mode_upper == "MOM_ONLY" and regime != "KALMAN_MOMENTUM":
+        return fail("STRATEGY_MODE_VETO")
+
     arrays = [np.asarray(v, dtype=float) for v in (z_score, level, velocity, innovation_std, atr, open_, close)]
     z, x, v, s, a, o, c = arrays
     n = len(c)
+
+    h = np.asarray(high_, dtype=float) if high_ is not None else None
+    l = np.asarray(low_, dtype=float) if low_ is not None else None
 
     if n < 3 or any(len(q) != n for q in arrays):
         return fail("INSUFFICIENT_BARS")
@@ -365,10 +389,10 @@ def evaluate_stigma_trigger(
         return fail("INVALID_MACRO_BIAS")
 
     entry = float(c[-1])
-    risk = 1.2 * float(a[-1])
+    risk = 1.6 * float(a[-1])
 
-    # Minimum SL / Spread protection (cost must not exceed 25% of stop distance)
-    if cost_price > 0 and risk < 4.0 * cost_price:
+    # Minimum SL / Spread protection (cost must not exceed 28.5% of stop distance: risk >= 3.5 * cost)
+    if cost_price > 0 and risk < 3.5 * cost_price:
         return fail("HIGH_COST_TO_SL")
 
     side = None
@@ -436,29 +460,45 @@ def evaluate_stigma_trigger(
 
         hold = 24
 
-        # Long Momentum setup
-        if v[-1] > 0 and -1.2 <= z[-1] <= -0.15 and z[-1] > z[-2] and c[-1] > o[-1]:
+        # Long Momentum:
+        # 1. Kalman slope positive (v[-1] > 0)
+        # 2. Kalman level trend positive (x[-1] > x[-10])
+        # 3. Pullback to Kalman line (-1.0 <= Z_K <= +0.25)
+        # 4. Strong breakout candle (c[-1] > o[-1] and c[-1] > high[i-1])
+        pullback_long = (-1.0 <= z[-1] <= 0.25) or (-1.0 <= np.min(z[-3:]) <= 0.2 and z[-1] <= 0.8)
+        trend_long = (x[-1] > x[-10]) if n >= 10 else (x[-1] > x[0])
+        breakout_long = (c[-1] > o[-1]) and (c[-1] > h[-2] if (h is not None and len(h) >= 2) else True)
+
+        if v[-1] > 0 and trend_long and pullback_long and breakout_long:
             if macro_bias < 0:
                 return fail("MACRO_VETO_LONG")
             side = "LONG"
             stop = entry - risk
             eff_entry = entry + 0.5 * cost_price
-            tp1 = entry + 1.4 * risk
-            tp2 = entry + 2.6 * risk
+            tp1 = entry + 1.5 * risk
+            tp2 = entry + 2.8 * risk
 
             rr_tp2 = (tp2 - eff_entry) / risk
             if rr_tp2 < 1.6:
                 return fail("LOW_RR")
 
-        # Short Momentum setup
-        elif v[-1] < 0 and 0.15 <= z[-1] <= 1.2 and z[-1] < z[-2] and c[-1] < o[-1]:
+        # Short Momentum:
+        # 1. Kalman slope negative (v[-1] < 0)
+        # 2. Kalman level trend negative (x[-1] < x[-10])
+        # 3. Pullback to Kalman line (-0.25 <= Z_K <= +1.0)
+        # 4. Strong breakdown candle (c[-1] < o[-1] and c[-1] < low[i-1])
+        pullback_short = (-0.25 <= z[-1] <= 1.0) or (-0.2 <= np.max(z[-3:]) <= 1.0 and z[-1] >= -0.8)
+        trend_short = (x[-1] < x[-10]) if n >= 10 else (x[-1] < x[0])
+        breakdown_short = (c[-1] < o[-1]) and (c[-1] < l[-2] if (l is not None and len(l) >= 2) else True)
+
+        if v[-1] < 0 and trend_short and pullback_short and breakdown_short:
             if macro_bias > 0:
                 return fail("MACRO_VETO_SHORT")
             side = "SHORT"
             stop = entry + risk
             eff_entry = entry - 0.5 * cost_price
-            tp1 = entry - 1.4 * risk
-            tp2 = entry - 2.6 * risk
+            tp1 = entry - 1.5 * risk
+            tp2 = entry - 2.8 * risk
 
             rr_tp2 = (eff_entry - tp2) / risk
             if rr_tp2 < 1.6:

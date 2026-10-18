@@ -62,6 +62,7 @@ def prepare_features(df: pd.DataFrame, *, adaptive_kalman: bool = True) -> pd.Da
     out["kalman_velocity"] = k.velocity
     out["innovation_std"] = k.innovation_std
     out["z_k"] = k.z_score
+    out["rolling_spread_std"] = pd.Series(c - k.level).rolling(60, min_periods=20).std()
 
     return out
 
@@ -123,6 +124,7 @@ def backtest(
     tp_mode: str = "scale_out",
     session_type: str = "auto",
     adaptive_kalman: bool = True,
+    strategy_mode: str = "BOTH",
 ) -> dict[str, Any]:
     """Causal, realistic single-position simulator with Funnel Telemetry."""
     f = prepare_features(df, adaptive_kalman=adaptive_kalman)
@@ -348,7 +350,14 @@ def backtest(
         if regime.label == "RANDOM_WALK_VETO":
             funnel["veto_random_walk"] += 1
             continue
-        elif regime.label == "OU_MEAN_REVERSION":
+
+        mode_upper = strategy_mode.upper()
+        if mode_upper == "OU_ONLY" and regime.label != "OU_MEAN_REVERSION":
+            continue
+        elif mode_upper == "MOM_ONLY" and regime.label != "KALMAN_MOMENTUM":
+            continue
+
+        if regime.label == "OU_MEAN_REVERSION":
             funnel["regime_ou_mr_bars"] += 1
             start = max(0, i - 119)  # 120-bar local window
             spread_series = closes[start:i + 1] - levels[start:i + 1]
@@ -382,10 +391,13 @@ def backtest(
             atr=atrs[:i + 1],
             open_=opens[:i + 1],
             close=closes[:i + 1],
+            high_=highs[:i + 1],
+            low_=lows[:i + 1],
             macro_bias=macro_bias,
             cost_price=total_cost,
             sigma_yz=sigmas_yz[i],
             sigma_yz_median=sigmas_yz_med[i],
+            strategy_mode=strategy_mode,
             return_reason=True,
         )
 
@@ -469,6 +481,27 @@ def backtest(
     ]
     t = pd.DataFrame(trades) if trades else pd.DataFrame(columns=trade_columns)
 
+    by_regime: dict[str, Any] = {}
+    for reg in ["OU_MEAN_REVERSION", "KALMAN_MOMENTUM"]:
+        sub_t = t.loc[t.regime == reg] if (not t.empty and "regime" in t.columns) else pd.DataFrame()
+        if sub_t.empty:
+            by_regime[reg] = {
+                "trades": 0,
+                "win_rate": 0.0,
+                "profit_factor": 0.0,
+                "net_pnl": 0.0,
+            }
+        else:
+            w = sub_t.loc[sub_t.net_pnl > 0, "net_pnl"].sum()
+            l = -sub_t.loc[sub_t.net_pnl < 0, "net_pnl"].sum()
+            pf_reg = float(w / l) if l > 0 else (float("inf") if w > 0 else 0.0)
+            by_regime[reg] = {
+                "trades": int(len(sub_t)),
+                "win_rate": float((sub_t.net_pnl > 0).mean()),
+                "profit_factor": pf_reg,
+                "net_pnl": float(sub_t.net_pnl.sum()),
+            }
+
     if t.empty:
         return {
             "trades": 0,
@@ -483,6 +516,8 @@ def backtest(
             "avg_trade_bars": 0.0,
             "long_trades": 0,
             "short_trades": 0,
+            "strategy_mode": strategy_mode,
+            "by_regime": by_regime,
             "trades_frame": t,
             "funnel_counts": funnel,
         }
@@ -514,6 +549,8 @@ def backtest(
         "avg_trade_bars": float(t.bars.mean()),
         "long_trades": int((t.side == "LONG").sum()),
         "short_trades": int((t.side == "SHORT").sum()),
+        "strategy_mode": strategy_mode,
+        "by_regime": by_regime,
         "trades_frame": t,
         "funnel_counts": funnel,
     }

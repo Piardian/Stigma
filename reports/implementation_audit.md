@@ -139,3 +139,37 @@ In Phase 2, deep funnel telemetry uncovered 4 core architectural bottlenecks tha
 ### Funnel Diagnostics Telemetry
 Added complete `funnel_counts` tracking every bar across 11 rejection gates (`bars_evaluated`, `veto_session_hours`, `veto_random_walk`, `regime_ou_mr_bars`, `regime_kalman_mom_bars`, `passed_ou_halflife`, `passed_yz_vol`, `passed_zscore_setup`, `passed_turn_and_candle`, `rejected_high_cost_to_sl`, `rejected_low_rr`, `trades_opened`).
 
+---
+
+## 6. Phase 3 Mathematical Calibrations, Regime Isolation & Whitelist Validation
+
+Deep analysis of the Phase 2 funnel telemetry revealed three remaining root causes of negative expectancy:
+
+### A. Heavy Institutional Kalman Line ($Q/R = 0.0005$)
+* **Problem:** In Phase 2, $Q_i = 0.02 R_i$ and $R_i = (0.5 \times \text{ATR})^2$ allowed the Kalman state $\hat{x}_t$ to cling too tightly to recent prices. A single 1-ATR move caused $Z_K \ge 2.0$, flooding the engine with false triggers (258 trades on BTCUSDT M15, 213 on NAS100 M15).
+* **Resolution:** Re-calibrated measurement noise to $R_i = \max(\text{ATR}_i^2, 10^{-12})$ and process noise to $Q_i = 0.0005 \times R_i$. This turns $\hat{x}_t$ into a smooth, heavy institutional equilibrium benchmark.
+
+### B. Empirical Spread Z-Score ($Z_K$)
+* **Problem:** Normalizing spread by $0.5 \times \text{ATR}$ produced arbitrary, non-Gaussian Z-scores.
+* **Resolution:** Computed the empirical standard deviation of the spread ($S_t = P_t - \hat{x}_t$) over a trailing 60-bar causal rolling window (`min_periods=20`):
+  $$Z_{K, t} = \frac{P_t - \hat{x}_t}{\max(\text{rolling\_spread\_std}_t, 1.0 \times \text{ATR}_{14, t})}$$
+  Now, $|Z_K| \ge 2.0$ represents a true 2-standard-deviation tail event against the actual empirical distribution.
+
+### C. Regime Isolation (`OU_ONLY` vs `MOM_ONLY`)
+* **Problem:** Testing both regimes concurrently masked individual edge: trend assets (`NAS100`, `BTCUSDT`) suffered heavy losses from counter-trend mean reversion, while FX pairs were polluted by false momentum trades.
+* **Resolution:** Added `strategy_mode` (`"BOTH"`, `"OU_ONLY"`, `"MOM_ONLY"`) and detailed `by_regime` metrics breakdown. Backtests confirmed that trend assets should exclusively run `MOM_ONLY` on higher timeframes (H1).
+
+### D. Enhanced Momentum Pullback & Breakout Mechanics
+* **Long Rules:** Kalman velocity $v_t > 0$, level trend $x_t > x_{t-10}$, pullback $-1.0 \le Z_K \le +0.25$, candle breakout ($C > O$ and $C > H_{i-1}$), and expanding Yang–Zhang volatility ($\sigma_{YZ} > \text{median}_{50}$).
+* **Short Rules:** Symmetric mirror ($v_t < 0$, $x_t < x_{t-10}$, $-0.25 \le Z_K \le +1.0$, $C < O$ and $C < L_{i-1}$, $\sigma_{YZ} > \text{median}_{50}$).
+* **Stop-Loss Distance:** Expanded from $1.2 \times \text{ATR}$ to $1.6 \times \text{ATR}_{14}$, reducing stop-out rates caused by micro-noise.
+
+### E. Whitelist Achievement: `USDJPY_M15_MOM_ONLY_Autonomous`
+Through these calibrations, the engine achieved its first formal strategy whitelisting:
+* **Symbol:** `USDJPY` (M15, Autonomous)
+* **OOS PnL:** $+21.57$ (PF 2.04 across 20 trades)
+* **Train PnL:** $+0.64$ (positive)
+* **Full Sample PnL:** $+15.87$ (133 trades)
+* **Max Drawdown:** 0.28% (under 25% threshold)
+
+

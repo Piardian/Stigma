@@ -6,7 +6,7 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 
 SUPPORTED_SYMBOLS = {"EURUSD", "CADCHF", "USDJPY", "XAUUSD", "NAS100"}
-SUPPORTED_TIMEFRAMES = {"M5", "M15"}
+SUPPORTED_TIMEFRAMES = {"M5", "M15", "H1"}
 
 def resolve_broker_symbol(mt5, symbol: str) -> str:
     """Find exact broker symbol name, resolving broker-specific suffixes/prefixes."""
@@ -59,11 +59,12 @@ def fetch_mt5(
 
     tf_upper = timeframe.upper()
     if tf_upper not in SUPPORTED_TIMEFRAMES:
-        raise ValueError(f"Timeframe must be M5 or M15, got '{timeframe}'")
+        raise ValueError(f"Timeframe must be M5, M15, or H1, got '{timeframe}'")
 
     mapping = {
         "M5": mt5.TIMEFRAME_M5,
         "M15": mt5.TIMEFRAME_M15,
+        "H1": mt5.TIMEFRAME_H1,
     }
 
     if not mt5.initialize():

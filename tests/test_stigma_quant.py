@@ -177,8 +177,8 @@ def test_dynamic_time_stop_clipping():
 # =====================================================================
 
 def test_cost_to_sl_protection():
-    """Signals where risk < 4.0 * cost_price are rejected with HIGH_COST_TO_SL."""
-    # ATR is 0.1 -> risk = 1.2 * 0.1 = 0.12. If cost_price = 0.04 -> 4.0 * cost = 0.16 > risk
+    """Signals where risk < 3.5 * cost_price are rejected with HIGH_COST_TO_SL."""
+    # ATR is 0.1 -> risk = 1.6 * 0.1 = 0.16. If cost_price = 0.05 -> 3.5 * cost = 0.175 > risk
     sig, reason = evaluate_stigma_trigger(
         regime="OU_MEAN_REVERSION",
         hurst=0.40,
@@ -192,7 +192,7 @@ def test_cost_to_sl_protection():
         open_=[100.0, 100.0, 100.0],
         close=[100.5, 100.5, 101.0],
         macro_bias=0,
-        cost_price=0.04,  # High cost compared to 0.12 risk!
+        cost_price=0.05,  # High cost: 3.5 * 0.05 = 0.175 > 0.16 risk!
         return_reason=True,
     )
     assert sig is None
@@ -200,7 +200,7 @@ def test_cost_to_sl_protection():
 
 def test_net_rr_gate_relocates_close_tp1():
     """When Kalman level is closer than 1.1 R, TP1 is moved forward to at least 1.15 R."""
-    # ATR = 1.0 -> risk = 1.2. Kalman level is only 101.5 (0.5 above entry 101.0 -> 0.42 R)
+    # ATR = 1.0 -> risk = 1.6 * 1.0 = 1.6. Kalman level is only 101.5 (0.5 above entry 101.0 -> 0.31 R)
     sig = evaluate_stigma_trigger(
         regime="OU_MEAN_REVERSION",
         hurst=0.40,
@@ -217,8 +217,8 @@ def test_net_rr_gate_relocates_close_tp1():
         cost_price=0.01,
     )
     assert sig is not None
-    # TP1 must have been pushed forward to >= entry + 1.15 * risk = 101.0 + 1.38 = 102.38
-    assert sig["tp1"] >= 101.0 + 1.15 * 1.2
+    # TP1 must have been pushed forward to >= entry + 1.15 * risk = 101.0 + 1.15 * 1.6 = 102.84
+    assert sig["tp1"] >= 101.0 + 1.15 * 1.6
     assert sig["rr_tp1"] >= 1.10
 
 def test_net_rr_gate_rejects_low_rr():
@@ -346,3 +346,95 @@ def test_execution_bridge_order_intent_validation():
     assert intent["mode"] == "LIVE_DISABLED"
     assert intent["order_type"] == "MARKET_NEXT_BAR"
     assert intent["risk_distance"] == 2.0
+
+# =====================================================================
+# 9. FAZ 3: SPREAD Z-SCORE, REGIME ISOLATION & H1 TIMEFRAMES
+# =====================================================================
+
+def test_empirical_spread_zscore_formula():
+    """Verify Z_K = (P - level) / max(rolling_spread_std, 1.0 * ATR14)."""
+    n = 100
+    prices = 100.0 + np.sin(np.linspace(0, 10, n)) * 2.0
+    atr = np.full(n, 0.5)
+    k = run_kalman_filter_1d(prices, atr, adaptive=True)
+    assert len(k.z_score) == n
+    assert np.isfinite(k.z_score[20:]).all()
+
+def test_kalman_momentum_breakout_and_pullback():
+    """Kalman Momentum requires pullback to Kalman line and strong candle breakout."""
+    # 1. Successful breakout
+    sig, reason = evaluate_stigma_trigger(
+        regime="KALMAN_MOMENTUM",
+        hurst=0.60,
+        variance_ratio=1.15,
+        half_life=10.0,
+        z_score=[0.1, -0.2, 0.1],
+        level=[99.5, 99.7, 100.0],
+        velocity=[0.1, 0.15, 0.2],
+        innovation_std=[0.5, 0.5, 0.5],
+        atr=[0.5, 0.5, 0.5],
+        open_=[99.8, 99.8, 99.9],
+        close=[100.1, 100.2, 100.8],
+        high_=[100.3, 100.4, 101.0],
+        low_=[99.5, 99.6, 99.8],
+        macro_bias=0,
+        sigma_yz=0.012,
+        sigma_yz_median=0.008,
+        strategy_mode="MOM_ONLY",
+        return_reason=True,
+    )
+    assert sig is not None
+    assert reason == "SUCCESS"
+    assert sig["side"] == "LONG"
+    assert sig["risk"] == pytest.approx(1.6 * 0.5)
+
+    # 2. Vetoed by regime isolation when strategy_mode is OU_ONLY
+    sig_veto, reason_veto = evaluate_stigma_trigger(
+        regime="KALMAN_MOMENTUM",
+        hurst=0.60,
+        variance_ratio=1.15,
+        half_life=10.0,
+        z_score=[0.1, -0.2, 0.1],
+        level=[99.5, 99.7, 100.0],
+        velocity=[0.1, 0.15, 0.2],
+        innovation_std=[0.5, 0.5, 0.5],
+        atr=[0.5, 0.5, 0.5],
+        open_=[99.8, 99.8, 99.9],
+        close=[100.1, 100.2, 100.8],
+        high_=[100.3, 100.4, 101.0],
+        low_=[99.5, 99.6, 99.8],
+        macro_bias=0,
+        sigma_yz=0.012,
+        sigma_yz_median=0.008,
+        strategy_mode="OU_ONLY",
+        return_reason=True,
+    )
+    assert sig_veto is None
+    assert reason_veto == "STRATEGY_MODE_VETO"
+
+def test_backtest_by_regime_breakdown():
+    """Verify backtest output includes by_regime breakdown for OU and Momentum."""
+    rng = np.random.default_rng(42)
+    dates = pd.date_range("2026-01-05 06:00", periods=250, freq="15min", tz="UTC")
+    c = 100.0 + np.cumsum(rng.normal(0, 0.1, 250))
+    o = c + rng.normal(0, 0.02, 250)
+    h = np.maximum(o, c) + 0.1
+    l = np.minimum(o, c) - 0.1
+    df = pd.DataFrame({"open": o, "high": h, "low": l, "close": c}, index=dates)
+
+    res = backtest(df, session_type="all", strategy_mode="BOTH")
+    assert "by_regime" in res
+    assert "OU_MEAN_REVERSION" in res["by_regime"]
+    assert "KALMAN_MOMENTUM" in res["by_regime"]
+    assert "strategy_mode" in res
+    assert res["strategy_mode"] == "BOTH"
+
+def test_h1_timeframe_adapters():
+    """Verify H1 is recognized as a valid timeframe without ValueError in both adapters."""
+    from stigma.data.binance_data import INTERVALS
+    from stigma.data.mt5_data import SUPPORTED_TIMEFRAMES
+
+    assert "H1" in INTERVALS
+    assert INTERVALS["H1"] == "1h"
+    assert "H1" in SUPPORTED_TIMEFRAMES
+
