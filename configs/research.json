@@ -1,0 +1,10 @@
+{
+  "hurst_window": 100,
+  "hurst_lags": [2, 4, 8, 16],
+  "random_walk_veto": [0.46, 0.54],
+  "mean_reversion": {"hurst_max": 0.46, "variance_ratio_max": 0.92, "half_life_min": 2.0, "half_life_max": 30.0},
+  "momentum": {"hurst_min": 0.54, "variance_ratio_min": 1.08},
+  "risk": {"stop_atr_multiple": 1.2, "max_concurrent_positions": 1},
+  "live_execution_enabled": false,
+  "status": "RESEARCH_ONLY"
+}
