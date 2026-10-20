@@ -298,8 +298,8 @@ def send_telegram_message(
     timeout_sec: float = 5.0,
 ) -> bool:
     """Send arbitrary HTML message to Telegram API. Fails closed / logs gracefully."""
-    token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN")
-    chat = chat_id or os.environ.get("TELEGRAM_CHAT_ID")
+    token = bot_token if bot_token is not None else os.environ.get("TELEGRAM_BOT_TOKEN")
+    chat = chat_id if chat_id is not None else os.environ.get("TELEGRAM_CHAT_ID")
 
     # If chat_id is missing, attempt quick discovery once
     if token and not chat:

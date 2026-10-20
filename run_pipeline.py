@@ -42,6 +42,16 @@ load_env_file()
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("run_pipeline")
 
+# Persistent file logging for background/autostart watchers
+try:
+    _log_dir = Path(__file__).resolve().parent / "reports"
+    _log_dir.mkdir(parents=True, exist_ok=True)
+    _fh = logging.FileHandler(_log_dir / "watcher.log", encoding="utf-8")
+    _fh.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    logging.getLogger().addHandler(_fh)
+except Exception:
+    pass
+
 def run_walk_forward(
     df: pd.DataFrame,
     *,
@@ -355,6 +365,17 @@ def watch_whitelisted_strategies(
 ) -> None:
     """Continuously monitor whitelisted strategies. Re-scans silently on each new closed bar."""
     logger.info("Starting Stigma Whitelist Watch loop (interval: %ds, whitelist: %s)...", interval_sec, whitelist_file)
+    if send_alerts:
+        startup_msg = (
+            "🚀 <b>STIGMA QUANT ENGINE — NÖBETÇİ AKTİF</b> 🚀\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "📡 <b>Durum:</b> Arka plan canlı piyasa nöbetçisi devrede.\n"
+            f"⏱️ <b>Tarama Periyodu:</b> Her {interval_sec} saniyede bir.\n"
+            "🛡️ <b>İzlenen Stratejiler:</b> 6 Onaylı Whitelist Stratejisi.\n"
+            "━━━━━━━━━━━━━━━━━━━\n"
+            "🔔 <i>Açılan/kapanan işlemler bu kanala anlık olarak raporlanacaktır.</i>"
+        )
+        send_telegram_message(startup_msg)
     dedup = SignalDeduplicator()
     pos_tracker = LivePositionTracker()
     previous_bars: dict[str, str] = {}
@@ -497,6 +518,57 @@ def test_telegram_alert() -> bool:
     print(f"[{'OK' if close_ok else 'FAIL'}] Kapanis mesaji: {close_ok}\n")
     return open_ok and close_ok
 
+def install_autostart(interval_sec: int = 30) -> bool:
+    """Create a Windows Startup VBScript that launches Stigma watcher silently on login."""
+    startup_dir = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    if not startup_dir.exists():
+        print(f"[ERROR] Windows Startup directory not found: {startup_dir}")
+        return False
+
+    vbs_path = startup_dir / "StigmaWatcher.vbs"
+    project_dir = Path(__file__).resolve().parent
+    python_exe = sys.executable
+    pythonw_exe = Path(python_exe).parent / "pythonw.exe"
+    runner_exe = str(pythonw_exe) if pythonw_exe.exists() else str(python_exe)
+    script_path = project_dir / "run_pipeline.py"
+
+    vbs_content = (
+        'Set WshShell = CreateObject("WScript.Shell")\n'
+        f'WshShell.CurrentDirectory = "{project_dir}"\n'
+        f'WshShell.Run """{runner_exe}"" ""{script_path}"" --scan-whitelist --watch --interval-sec {interval_sec}", 0, False\n'
+    )
+    try:
+        with open(vbs_path, "w", encoding="utf-8") as f:
+            f.write(vbs_content)
+        print("\n" + "=" * 80)
+        print("  STIGMA QUANT ENGINE -- OTOMATIK BASLANGIC KURULDU")
+        print("=" * 80)
+        print(f"  [OK] Windows Baslangic Dosyasi: {vbs_path}")
+        print(f"  [OK] Calistirilacak: pythonw.exe (Sessiz arka plan, CMD penceresi acilmaz)")
+        print(f"  [OK] Interval: Her {interval_sec} saniyede bir canli piyasa taramasi")
+        print("  [OK] Bilgisayariniz her acildiginda Stigma Watcher otomatik baslayacak!")
+        print("=" * 80 + "\n")
+        return True
+    except Exception as exc:
+        print(f"[ERROR] Otomatik baslangic kurulamadi: {exc}")
+        return False
+
+def uninstall_autostart() -> bool:
+    """Remove Stigma watcher from Windows Startup."""
+    startup_dir = Path(os.environ.get("APPDATA", "")) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Startup"
+    vbs_path = startup_dir / "StigmaWatcher.vbs"
+    if vbs_path.exists():
+        try:
+            vbs_path.unlink()
+            print("\n[OK] Stigma Watcher Windows baslangicindan basariyla kaldirildi.\n")
+            return True
+        except Exception as exc:
+            print(f"[ERROR] Kaldirma hatasi: {exc}")
+            return False
+    else:
+        print("\n[*] Otomatik baslangic zaten yuklu degil.\n")
+        return True
+
 def main():
     p = argparse.ArgumentParser(description="Stigma Quant Engine Pipeline & Live Whitelist Runner")
     p.add_argument("--scan-whitelist", action="store_true", help="Scan all approved strategies from whitelist.json")
@@ -505,6 +577,8 @@ def main():
     p.add_argument("--whitelist-file", default="reports/whitelist.json", help="Path to whitelist.json")
     p.add_argument("--pair-telegram", action="store_true", help="Run Telegram bot pairing wizard to detect chat_id")
     p.add_argument("--test-telegram", action="store_true", help="Send sample open and close alerts to Telegram")
+    p.add_argument("--install-autostart", action="store_true", help="Configure Windows to start watcher automatically on PC boot")
+    p.add_argument("--uninstall-autostart", action="store_true", help="Remove Stigma watcher from Windows startup")
     p.add_argument("--source", choices=["csv", "mt5", "binance"], default="csv")
     p.add_argument("--file", help="CSV file with time,open,high,low,close columns")
     p.add_argument("--symbol", default="EURUSD")
@@ -526,6 +600,14 @@ def main():
 
     if args.test_telegram:
         test_telegram_alert()
+        return
+
+    if args.install_autostart:
+        install_autostart(interval_sec=args.interval_sec)
+        return
+
+    if args.uninstall_autostart:
+        uninstall_autostart()
         return
 
     # Mode 1: Whitelist Scan or Watch
