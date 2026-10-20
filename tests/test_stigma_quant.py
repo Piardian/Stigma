@@ -651,3 +651,218 @@ def test_scan_whitelist_missing_file_failsafe():
 
 
 
+
+
+#
+
+
+# =====================================================================
+# 12. TELEGRAM TRADE CLOSING ALERTS, PNL, NET R & TP/SL COUNTERS
+# =====================================================================
+
+def test_format_trade_close_message_metrics():
+    """Trade close message contains Net PnL, gross Net R, post-commission Net R, and TP/SL counters."""
+    from stigma.execution_notifier import format_trade_close_message
+
+    trade = {
+        "symbol": "USDJPY",
+        "timeframe": "M15",
+        "strategy_mode": "MOM_ONLY",
+        "side": "LONG",
+        "entry": 149.250,
+        "exit": 150.400,
+        "tp1_exit_price": 149.850,
+        "tp1_hit": True,
+        "initial_risk": 0.450,
+        "bars_held": 8,
+        "exit_reason": "tp2",
+        "gross_r": 1.98,
+        "net_r": 1.91,
+        "net_pnl": 88.20,
+    }
+    stats = {
+        "total_trades": 20,
+        "tp_count": 14,
+        "sl_count": 5,
+        "breakeven_count": 1,
+        "win_rate": 70.0,
+        "cumulative_net_r": 18.45,
+        "cumulative_net_pnl": 842.10,
+    }
+
+    msg = format_trade_close_message(trade, stats)
+    assert "USDJPY (M15)" in msg
+    assert "MOM_ONLY" in msg
+    assert "TP2" in msg
+    assert "+88.20 USD" in msg
+    assert "+1.98 R" in msg
+    assert "+1.91 R" in msg
+    assert "14" in msg
+    assert "5" in msg
+    assert "70.0" in msg
+    assert "+18.45 R" in msg
+
+def test_live_performance_tracker_counters():
+    """LivePerformanceTracker accurately updates TP, SL, BE, Win Rate, and cumulative Net R."""
+    import tempfile
+    from pathlib import Path
+    import pytest
+    from stigma.execution_notifier import LivePerformanceTracker
+
+    with tempfile.TemporaryDirectory() as td:
+        json_file = Path(td) / "test_perf.json"
+        tracker = LivePerformanceTracker(filepath=json_file)
+
+        # 1. Winning trade (+1.85 R, +$92.50)
+        win_trade = {
+            "symbol": "NAS100",
+            "timeframe": "M15",
+            "side": "LONG",
+            "entry": 20000.0,
+            "exit": 20185.0,
+            "exit_reason": "tp2",
+            "gross_r": 1.90,
+            "net_r": 1.85,
+            "net_pnl": 92.50,
+        }
+        stats1 = tracker.record_closed_trade(win_trade)
+        assert stats1["tp_count"] == 1
+        assert stats1["sl_count"] == 0
+        assert stats1["total_trades"] == 1
+        assert stats1["win_rate"] == 100.0
+        assert stats1["cumulative_net_r"] == 1.85
+        assert stats1["cumulative_net_pnl"] == 92.50
+
+        # 2. Losing trade (-1.05 R, -$52.50)
+        loss_trade = {
+            "symbol": "BTCUSDT",
+            "timeframe": "H1",
+            "side": "SHORT",
+            "entry": 65000.0,
+            "exit": 65550.0,
+            "exit_reason": "stop",
+            "gross_r": -1.0,
+            "net_r": -1.05,
+            "net_pnl": -52.50,
+        }
+        stats2 = tracker.record_closed_trade(loss_trade)
+        assert stats2["tp_count"] == 1
+        assert stats2["sl_count"] == 1
+        assert stats2["total_trades"] == 2
+        assert stats2["win_rate"] == 50.0
+        assert stats2["cumulative_net_r"] == pytest.approx(0.80)
+        assert stats2["cumulative_net_pnl"] == pytest.approx(40.00)
+
+        # 3. Breakeven trade (+0.01 R, +$0.50)
+        be_trade = {
+            "symbol": "USDJPY",
+            "timeframe": "M15",
+            "side": "LONG",
+            "entry": 149.00,
+            "exit": 149.02,
+            "exit_reason": "breakeven_stop",
+            "gross_r": 0.04,
+            "net_r": 0.01,
+            "net_pnl": 0.50,
+        }
+        stats3 = tracker.record_closed_trade(be_trade)
+        assert stats3["tp_count"] == 1
+        assert stats3["sl_count"] == 1
+        assert stats3["breakeven_count"] == 1
+        assert stats3["total_trades"] == 3
+        assert stats3["win_rate"] == pytest.approx(33.3, abs=0.1)
+
+def test_live_position_tracker_tp_scale_out_lifecycle():
+    """LivePositionTracker scales out at TP1, trails SL to breakeven, and closes at TP2."""
+    import tempfile
+    from pathlib import Path
+    import pytest
+    from stigma.execution_notifier import LivePerformanceTracker, LivePositionTracker
+
+    with tempfile.TemporaryDirectory() as td:
+        perf_file = Path(td) / "perf.json"
+        pos_file = Path(td) / "pos.json"
+        perf = LivePerformanceTracker(filepath=perf_file)
+        tracker = LivePositionTracker(filepath=pos_file, perf_tracker=perf)
+
+        signal = {
+            "symbol": "USDJPY",
+            "timeframe": "M15",
+            "strategy_mode": "MOM_ONLY",
+            "macro_mode": "Begonya_Macro",
+            "side": "LONG",
+            "entry": 100.0,
+            "stop_loss": 99.0,
+            "tp1": 101.35,
+            "tp2": 102.60,
+            "risk": 1.0,
+            "max_hold_bars": 20,
+            "bar_time": "2026-10-20 08:00:00",
+        }
+        pos = tracker.open_position(signal, units=1.0, cost_price=0.05)
+        assert tracker.has_position("USDJPY", "MOM_ONLY") is True
+
+        # Bar 1: Price reaches TP1 (High = 101.50)
+        candle1 = {"open": 100.2, "high": 101.50, "low": 100.1, "close": 101.2, "time": "2026-10-20 08:15:00"}
+        closed1, stats1 = tracker.update_candle("USDJPY", "MOM_ONLY", candle1, kalman_level=100.5, atr=0.5)
+        assert closed1 is None  # Position still open (50% remaining)
+        pos_updated = tracker.get_position("USDJPY", "MOM_ONLY")
+        assert pos_updated["tp1_hit"] is True
+        assert pos_updated["tp1_exit_price"] == 101.35
+        assert pos_updated["stop_loss"] == 100.0  # Trailed to breakeven
+
+        # Bar 2: Price reaches TP2 (High = 102.80) -> Position closes completely
+        candle2 = {"open": 101.3, "high": 102.80, "low": 101.0, "close": 102.7, "time": "2026-10-20 08:30:00"}
+        closed2, stats2 = tracker.update_candle("USDJPY", "MOM_ONLY", candle2, kalman_level=101.0, atr=0.5)
+        assert closed2 is not None
+        assert tracker.has_position("USDJPY", "MOM_ONLY") is False
+        assert closed2["exit_reason"] == "tp2"
+        # Gross = 0.5 * (101.35 - 100) + 0.5 * (102.60 - 100) = 0.5 * 1.35 + 0.5 * 2.60 = 0.675 + 1.30 = 1.975
+        assert closed2["gross_pnl_unit"] == pytest.approx(1.975)
+        assert closed2["net_pnl_unit"] == pytest.approx(1.975 - 0.05)
+        assert closed2["net_r"] == pytest.approx((1.975 - 0.05) / 1.0)
+        assert stats2["tp_count"] == 1
+        assert stats2["sl_count"] == 0
+
+def test_live_position_tracker_stop_loss_exit():
+    """LivePositionTracker closes position at Stop Loss and records negative Net R."""
+    import tempfile
+    from pathlib import Path
+    import pytest
+    from stigma.execution_notifier import LivePerformanceTracker, LivePositionTracker
+
+    with tempfile.TemporaryDirectory() as td:
+        perf_file = Path(td) / "perf2.json"
+        pos_file = Path(td) / "pos2.json"
+        perf = LivePerformanceTracker(filepath=perf_file)
+        tracker = LivePositionTracker(filepath=pos_file, perf_tracker=perf)
+
+        signal = {
+            "symbol": "NAS100",
+            "timeframe": "M15",
+            "strategy_mode": "OU_ONLY",
+            "side": "SHORT",
+            "entry": 20000.0,
+            "stop_loss": 20100.0,
+            "tp1": 19850.0,
+            "tp2": 19700.0,
+            "risk": 100.0,
+            "max_hold_bars": 15,
+            "bar_time": "2026-10-20 09:00:00",
+        }
+        tracker.open_position(signal, units=2.0, cost_price=2.0)
+
+        # Bar 1: Price spikes up hitting stop (High = 20120)
+        candle = {"open": 20010.0, "high": 20120.0, "low": 19990.0, "close": 20110.0, "time": "2026-10-20 09:15:00"}
+        closed, stats = tracker.update_candle("NAS100", "OU_ONLY", candle, kalman_level=20000.0, atr=50.0)
+
+        assert closed is not None
+        assert tracker.has_position("NAS100", "OU_ONLY") is False
+        assert closed["exit_reason"] == "stop"
+        assert closed["exit"] == 20100.0
+        assert closed["gross_pnl_unit"] == pytest.approx(-100.0)
+        assert closed["net_pnl_unit"] == pytest.approx(-102.0)
+        assert closed["net_pnl"] == pytest.approx(-204.0)
+        assert closed["net_r"] == pytest.approx(-102.0 / 100.0)
+        assert stats["tp_count"] == 0
+        assert stats["sl_count"] == 1

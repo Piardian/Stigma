@@ -2,18 +2,18 @@
 
 ## 1. Test Execution Summary
 
-* **Date:** 2026-10-19
+* **Date:** 2026-10-20
 * **Test Runner:** `pytest 9.1.1` (Python 3.12.10, 64-bit Windows)
 * **Configuration:** `pyproject.toml` (with causal testpaths and `pythonpath = ["."]`)
-* **Total Tests Executed:** 31
-* **Passed:** 31
+* **Total Tests Executed:** 35
+* **Passed:** 35
 * **Failed:** 0
 * **Errors:** 0
-* **Execution Time:** ~1.00 seconds
+* **Execution Time:** ~3.36 seconds
 
 ```powershell
 python -m pytest tests/test_stigma_quant.py -v
-# Result: 31 passed in 1.00s (100% pass rate)
+# Result: 35 passed in 3.36s (100% pass rate)
 ```
 
 ---
@@ -53,9 +53,13 @@ python -m pytest tests/test_stigma_quant.py -v
 | 29 | `test_signal_deduplicator` | Execution Notifier | Verifies `SignalDeduplicator` prevents duplicate alerts for the same bar timestamp | PASSED |
 | 30 | `test_format_telegram_message_and_send_failsafe` | Telegram Dispatcher | Validates message formatting and confirms fail-safe error handling when tokens are absent | PASSED |
 | 31 | `test_scan_whitelist_missing_file_failsafe` | Pipeline CLI | Confirms `scan_whitelisted_strategies` handles missing whitelist file gracefully without throwing | PASSED |
+| 32 | `test_format_trade_close_message_metrics` | Execution Notifier | Validates Net PnL, gross Net R, post-commission Net R, TP/SL counters in trade closing alert | PASSED |
+| 33 | `test_live_performance_tracker_counters` | Performance Tracker | Validates cumulative TP, SL, BE, Win Rate, and cumulative Net R arithmetic | PASSED |
+| 34 | `test_live_position_tracker_tp_scale_out_lifecycle` | Position Tracker | Validates active position TP1 scale-out, breakeven stop move, and TP2 full closure | PASSED |
+| 35 | `test_live_position_tracker_stop_loss_exit` | Position Tracker | Validates active position Stop Loss execution, negative R, and SL counter increment | PASSED |
 
 ---
 
 ## 3. Conclusion
 
-All 31 unit tests pass deterministically in 1.00s with zero failures. All Phase 5 mathematical calibrations, momentum trailing stop & breakeven dynamics, profile-based FX midpoint reclaim, Whitelist Orchestrator (`--scan-whitelist`), deduplicator, and Telegram alert mechanics are 100% verified.
+All 35 unit tests pass deterministically in 3.36s with zero failures. All Phase 5 mathematical calibrations, momentum trailing stop & breakeven dynamics, profile-based FX midpoint reclaim, Whitelist Orchestrator (`--scan-whitelist`), deduplicator, Live Position Tracker, and Telegram open/close alert mechanics with Net PnL, Net R, and TP/SL counters are 100% verified.
