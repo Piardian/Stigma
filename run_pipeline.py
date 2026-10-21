@@ -96,6 +96,7 @@ def scan_whitelisted_strategies(
     deduplicator: SignalDeduplicator | None = None,
     position_tracker: LivePositionTracker | None = None,
     send_alerts: bool = True,
+    verbose: bool = True,
 ) -> tuple[list[dict], dict[str, str]]:
     """Scan all approved strategies from whitelist.json against live closed-bar market data."""
     wl_path = Path(whitelist_file)
@@ -340,7 +341,8 @@ def scan_whitelisted_strategies(
                         send_telegram_alert(payload)
 
     # Print scan report table
-    print("\n" + "=" * 96)
+    if verbose:
+        print("\n" + "=" * 96)
     print(f"  STIGMA QUANT ENGINE -- LIVE WHITELIST SCAN REPORT ({len(summary_rows)} Strategies)")
     print("=" * 96)
     print(f"{'SYMBOL':<10} {'TF':<5} {'STRATEGY':<12} {'MACRO':<15} {'REGIME':<20} {'Z_K':<7} {'STATUS / TRIGGER':<20}")
@@ -380,19 +382,28 @@ def watch_whitelisted_strategies(
     pos_tracker = LivePositionTracker()
     previous_bars: dict[str, str] = {}
 
+    first_run = True
     try:
         while True:
-            # Run scan with position tracker
-            _, current_bars = scan_whitelisted_strategies(
-                whitelist_file,
-                deduplicator=dedup,
-                position_tracker=pos_tracker,
-                send_alerts=send_alerts,
-            )
-            previous_bars = current_bars
+            try:
+                # Verbose on first run, or when we expect new bars
+                sigs, current_bars = scan_whitelisted_strategies(
+                    whitelist_file,
+                    deduplicator=dedup,
+                    position_tracker=pos_tracker,
+                    send_alerts=send_alerts,
+                    verbose=(first_run or bool(previous_bars and current_bars != previous_bars)),
+                )
+                if first_run or current_bars != previous_bars:
+                    first_run = False
+                    previous_bars = current_bars
+                    logger.info("Evaluated closed candle across %d assets. Next poll in %ds...", len(current_bars), interval_sec)
+                else:
+                    logger.info("Heartbeat: standing by (%ds). Waiting for next closed candle...", interval_sec)
 
-            # Wait for next poll
-            logger.info("Watch loop standing by (%ds). Waiting for next closed candle...", interval_sec)
+            except Exception as exc:
+                logger.error("Transient error in watch cycle: %s", exc, exc_info=True)
+
             time.sleep(interval_sec)
 
     except KeyboardInterrupt:
